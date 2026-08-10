@@ -4,7 +4,8 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.clipboard.ClipboardCaptureManager
+import com.example.data.clipboard.AndroidClipboardCaptureSource
+import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.database.ClipboardDatabase
 import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
@@ -32,25 +33,17 @@ class MainViewModel @JvmOverloads constructor(
         isPaired = true
     )
 
-    private val captureManager = ClipboardCaptureManager(
-        context = application,
+    private val captureSource = AndroidClipboardCaptureSource(application)
+
+    private val clipboardCore = ClipboardCoreManager(
+        captureSource = captureSource,
         repository = repository,
         deviceId = localDevice.deviceId,
-        deviceName = localDevice.deviceName
-    ).apply {
-        onItemCaptured = { capturedItem ->
-            viewModelScope.launch {
-                try {
-                    repository.insertClipboardItem(capturedItem)
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to persist captured clipboard item", e)
-                }
-            }
-        }
-    }
+        deviceName = localDevice.deviceName,
+        coroutineScope = viewModelScope
+    )
 
-    private val _isCaptureActive = MutableStateFlow(false)
-    val isCaptureActive: StateFlow<Boolean> = _isCaptureActive.asStateFlow()
+    val isCaptureActive: StateFlow<Boolean> = clipboardCore.isCaptureActive
 
     val clipboardItems: StateFlow<List<ClipboardItem>> = repository.clipboardHistory
         .stateIn(
@@ -152,17 +145,15 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun startClipboardCapture() {
-        captureManager.startCapture()
-        _isCaptureActive.value = captureManager.isCapturing
+        clipboardCore.startCapture()
     }
 
     fun stopClipboardCapture() {
-        captureManager.stopCapture()
-        _isCaptureActive.value = captureManager.isCapturing
+        clipboardCore.stopCapture()
     }
 
     fun checkClipboardNow() {
-        captureManager.processCurrentClip()
+        clipboardCore.checkClipboard()
     }
 
     fun setRetentionDays(days: Int) {

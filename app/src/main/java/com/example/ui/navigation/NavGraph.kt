@@ -101,7 +101,10 @@ fun MainNavGraph(
                         onTogglePin = viewModel::togglePin,
                         onDeleteItem = viewModel::deleteItem,
                         onClearAll = viewModel::clearAllItems,
-                        onCheckClipboard = viewModel::checkClipboardNow
+                        onCheckClipboard = viewModel::checkClipboardNow,
+                        onToggleCapture = {
+                            if (isCaptureActive) viewModel.stopClipboardCapture() else viewModel.startClipboardCapture()
+                        }
                     )
                 }
                 NavigationTab.DEVICES -> {

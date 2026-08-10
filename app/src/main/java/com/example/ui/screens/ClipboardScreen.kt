@@ -29,7 +29,8 @@ fun ClipboardScreen(
     onTogglePin: (String) -> Unit,
     onDeleteItem: (String) -> Unit,
     onClearAll: () -> Unit = {},
-    onCheckClipboard: () -> Unit = {}
+    onCheckClipboard: () -> Unit = {},
+    onToggleCapture: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilterTab by remember { mutableStateOf(0) } // 0: All, 1: Favorites, 2: Pinned
@@ -105,36 +106,51 @@ fun ClipboardScreen(
             // Privacy & Active Capture Banner
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    containerColor = if (isCaptureActive)
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 ),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Security,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = if (isCaptureActive) "Clipboard capture: Active (Foreground)" else "Clipboard capture: Available in foreground",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Security,
+                                contentDescription = null,
+                                tint = if (isCaptureActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = if (isCaptureActive) "Clipboard capture: Active (Foreground)" else "Clipboard capture: Stopped",
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Switch(
+                            checked = isCaptureActive,
+                            onCheckedChange = { onToggleCapture() },
+                            modifier = Modifier.testTag("toggle_capture_switch")
                         )
                     }
                     Text(
-                        text = "Clipboard history is stored locally on this device. Future synchronization will only occur between devices you authorize.",
+                        text = "Clipboard history is stored locally on this device. Clipboard synchronization will only be added for devices you authorize.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
