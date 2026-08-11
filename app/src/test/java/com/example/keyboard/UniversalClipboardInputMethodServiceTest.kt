@@ -61,12 +61,21 @@ class UniversalClipboardInputMethodServiceTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val editText = EditText(context)
         val editorInfo = EditorInfo()
-        val inputConnection = editText.onCreateInputConnection(editorInfo)
+        val realInputConnection = editText.onCreateInputConnection(editorInfo)
 
-        assertNotNull(inputConnection)
-        inputConnection?.commitText("Hello Universal Clipboard", 1)
+        val service = object : UniversalClipboardInputMethodService() {
+            override fun getCurrentInputConnection(): InputConnection? {
+                return realInputConnection
+            }
+        }
 
+        // Verify service insertText delegates to InputConnection
+        service.insertText("Hello Universal Clipboard")
         assertEquals("Hello Universal Clipboard", editText.text.toString())
+
+        // Verify service handleBackspace delegates to InputConnection
+        service.handleBackspace()
+        assertEquals("Hello Universal Clipboar", editText.text.toString())
     }
 
     @Test

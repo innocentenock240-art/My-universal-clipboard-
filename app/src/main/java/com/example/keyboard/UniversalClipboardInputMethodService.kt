@@ -3,6 +3,7 @@ package com.example.keyboard
 import android.inputmethodservice.InputMethodService
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.InputConnection
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
@@ -22,7 +23,7 @@ import com.example.ui.theme.UniversalClipboardTheme
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
-class UniversalClipboardInputMethodService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwner {
+open class UniversalClipboardInputMethodService : InputMethodService(), LifecycleOwner, SavedStateRegistryOwner {
 
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
@@ -34,6 +35,10 @@ class UniversalClipboardInputMethodService : InputMethodService(), LifecycleOwne
         get() = savedStateRegistryController.savedStateRegistry
 
     var repository: ClipboardRepository? = null
+
+    open override fun getCurrentInputConnection(): InputConnection? {
+        return super.getCurrentInputConnection()
+    }
 
     override fun onCreate() {
         super.onCreate()
