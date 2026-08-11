@@ -185,4 +185,33 @@ class ClipboardCoreManagerTest {
         assertFalse(fakeCaptureSource.isCapturing())
         assertFalse(coreManager.isCaptureActive.value)
     }
+
+    @Test
+    fun testManualAdditionRoutedThroughClipboardCore() = runTest(testDispatcher) {
+        val manualText = "Manual entry text test"
+        val item = coreManager.processClipboardText(manualText)
+
+        assertNotNull(item)
+        assertEquals(manualText, item?.content)
+        assertNotNull(item?.hash)
+        assertEquals(64, item?.hash?.length)
+
+        val storedItems = repository.clipboardHistory.first()
+        assertEquals(1, storedItems.size)
+        assertEquals(manualText, storedItems[0].content)
+        assertEquals(item?.hash, storedItems[0].hash)
+    }
+
+    @Test
+    fun testManualAdditionDeduplication() = runTest(testDispatcher) {
+        val manualText = "Duplicate manual text entry"
+        val firstItem = coreManager.processClipboardText(manualText)
+        val secondItem = coreManager.processClipboardText(manualText)
+
+        assertNotNull(firstItem)
+        assertNull(secondItem)
+
+        val storedItems = repository.clipboardHistory.first()
+        assertEquals(1, storedItems.size)
+    }
 }

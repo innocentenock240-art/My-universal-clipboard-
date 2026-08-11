@@ -79,27 +79,7 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun addClipboardItem(text: String) {
-        if (text.isBlank()) return
-        viewModelScope.launch {
-            try {
-                val now = System.currentTimeMillis()
-                val newItem = ClipboardItem(
-                    id = "clip_${now}_${(1000..9999).random()}",
-                    sourceDeviceId = localDevice.deviceId,
-                    sourceDeviceName = localDevice.deviceName,
-                    type = if (text.startsWith("http://") || text.startsWith("https://")) "URL" else "TEXT",
-                    content = text,
-                    createdAt = now,
-                    expiresAt = ClipboardRepository.calculateExpirationTime(
-                        createdAt = now,
-                        retentionDays = ClipboardRepository.DEFAULT_RETENTION_DAYS
-                    )
-                )
-                repository.insertClipboardItem(newItem)
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to insert clipboard item", e)
-            }
-        }
+        clipboardCore.processClipboardText(text)
     }
 
     fun toggleFavorite(itemId: String) {
