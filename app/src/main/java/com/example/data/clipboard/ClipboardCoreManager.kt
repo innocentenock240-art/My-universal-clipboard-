@@ -34,8 +34,18 @@ class ClipboardCoreManager(
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default)
 ) {
     @Volatile
+    var onItemProcessedListener: ((ClipboardItem) -> Unit)? = null
+
+    @Volatile
     var lastCapturedHash: String? = null
         private set
+
+    /**
+     * Update the last captured hash directly when an item is received from a remote sync peer.
+     */
+    fun updateLastCapturedHash(hash: String) {
+        lastCapturedHash = hash
+    }
 
     private val _isCaptureActive = MutableStateFlow(false)
     val isCaptureActive: StateFlow<Boolean> = _isCaptureActive.asStateFlow()
@@ -109,6 +119,7 @@ class ClipboardCoreManager(
         coroutineScope.launch {
             try {
                 repository.insertClipboardItem(newItem)
+                onItemProcessedListener?.invoke(newItem)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to persist captured clipboard item into repository", e)
             }

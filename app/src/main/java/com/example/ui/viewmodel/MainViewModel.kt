@@ -96,6 +96,7 @@ class MainViewModel @JvmOverloads constructor(
                 _incomingWifiMessages.value = _incomingWifiMessages.value + msg
             }
         }
+        startWifiDiscovery()
     }
 
     fun addClipboardItem(text: String) {

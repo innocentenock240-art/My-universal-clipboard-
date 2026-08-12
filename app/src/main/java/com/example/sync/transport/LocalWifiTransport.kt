@@ -5,8 +5,11 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
+import com.example.sync.model.parseClipboardItemFromJson
+import com.example.sync.model.toJsonString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,6 +63,8 @@ class LocalWifiTransport(
 
     private val _discoveredDevices = MutableStateFlow<List<Device>>(emptyList())
     val discoveredDevices: StateFlow<List<Device>> = _discoveredDevices.asStateFlow()
+
+    private val recentlyProcessedHashes = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
     @Volatile
     private var _isListening = false
@@ -478,10 +483,60 @@ class LocalWifiTransport(
 
                 val message = reader.readLine()
                 if (message != null) {
+                    val trimmed = message.trim()
+                    if (trimmed.startsWith("{")) {
+                        val item = parseClipboardItemFromJson(trimmed)
+                        if (item != null) {
+                            // 1. Validate SHA-256 Hash
+                            val computedHash = ClipboardCoreManager.computeSha256(item.content)
+                            if (computedHash != item.hash) {
+                                Log.e(TAG, "SHA-256 hash validation failed for item [${item.id}]. Expected: ${item.hash}, Computed: $computedHash")
+                                writer.println("ERROR_HASH_MISMATCH")
+                                return@withContext
+                            }
+
+                            // 2. Self Device & Echo Loop Prevention
+                            if (item.sourceDeviceId == localDeviceId) {
+                                Log.w(TAG, "Ignoring echo item from self device ID: ${item.sourceDeviceId}")
+                                writer.println("ACK_ECHO_SKIPPED")
+                                return@withContext
+                            }
+
+                            val isDuplicate = synchronized(recentlyProcessedHashes) {
+                                if (recentlyProcessedHashes.contains(item.hash)) {
+                                    true
+                                } else {
+                                    recentlyProcessedHashes.add(item.hash)
+                                    if (recentlyProcessedHashes.size > 500) {
+                                        val iterator = recentlyProcessedHashes.iterator()
+                                        if (iterator.hasNext()) {
+                                            iterator.next()
+                                            iterator.remove()
+                                        }
+                                    }
+                                    false
+                                }
+                            }
+
+                            if (isDuplicate) {
+                                Log.w(TAG, "Ignoring duplicate item with hash prefix: ${item.hash.take(8)}")
+                                writer.println("ACK_DUPLICATE_SKIPPED")
+                                return@withContext
+                            }
+
+                            // 3. Accepted
+                            writer.println("ACK_OK")
+                            _incomingItems.emit(item)
+                            _incomingMessages.emit("Received ClipboardItem [ID: ${item.id}, Source: ${item.sourceDeviceName}, ContentLength: ${item.content.length}]")
+                            Log.i(TAG, "Successfully received and validated remote ClipboardItem [ID: ${item.id}, HashPrefix: ${item.hash.take(8)}]")
+                            return@withContext
+                        }
+                    }
+
+                    // Handshake or diagnostic message fallback
                     Log.d(TAG, "Received message: $message from ${socket.remoteSocketAddress}")
                     _incomingMessages.emit(message)
 
-                    // Generate ACK response for handshake
                     val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { null }
                     val deviceName = if (rawModel.isNullOrBlank()) "DEVICE" else rawModel.replace(" ", "_")
                     val response = if (message.startsWith("HELLO_")) {
@@ -537,8 +592,54 @@ class LocalWifiTransport(
     }
 
     override suspend fun sendItem(item: ClipboardItem, targetDeviceId: String): Boolean {
-        // ClipboardItem transmission will be connected in subsequent sub-milestones
-        return false
+        return withContext(Dispatchers.IO) {
+            val jsonPayload = item.toJsonString()
+
+            // Resolve target devices
+            val targets = if (targetDeviceId.isNotBlank() && targetDeviceId.contains(".")) {
+                listOf(Device(deviceId = "target_ip", deviceName = "Target IP Device", ipAddress = targetDeviceId))
+            } else if (targetDeviceId.isNotBlank() && targetDeviceId != "ALL") {
+                _discoveredDevices.value.filter { it.deviceId == targetDeviceId && !it.ipAddress.isNullOrBlank() }
+            } else {
+                _discoveredDevices.value.filter { !it.ipAddress.isNullOrBlank() && it.deviceId != localDeviceId }
+            }
+
+            if (targets.isEmpty()) {
+                Log.w(TAG, "No active discovered target devices found to send ClipboardItem ${item.id}")
+                return@withContext false
+            }
+
+            var sentSuccessfully = false
+            for (device in targets) {
+                val ip = device.ipAddress ?: continue
+                var socket: Socket? = null
+                try {
+                    socket = Socket(ip, port)
+                    socket.soTimeout = 5000
+                    val writer = PrintWriter(socket.getOutputStream(), true)
+                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                    writer.println(jsonPayload)
+                    Log.d(TAG, "Sent ClipboardItem ${item.id} to $ip:$port")
+
+                    val ack = reader.readLine()
+                    Log.d(TAG, "Received ACK '$ack' for item ${item.id} from $ip:$port")
+
+                    if (ack == "ACK_OK" || ack == "ACK_DUPLICATE_SKIPPED" || ack == "ACK_ECHO_SKIPPED" || ack?.startsWith("ACK_") == true) {
+                        sentSuccessfully = true
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to send ClipboardItem ${item.id} to $ip:$port", e)
+                } finally {
+                    try {
+                        socket?.close()
+                    } catch (e: Exception) {
+                        // Ignore close error
+                    }
+                }
+            }
+            sentSuccessfully
+        }
     }
 
     override fun observeIncomingItems(): Flow<ClipboardItem> {
