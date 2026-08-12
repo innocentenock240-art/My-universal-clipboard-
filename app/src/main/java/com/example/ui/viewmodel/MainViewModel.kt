@@ -10,6 +10,8 @@ import com.example.data.database.ClipboardDatabase
 import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
 import com.example.data.repository.ClipboardRepository
+import com.example.sync.transport.LocalWifiTransport
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +23,8 @@ class MainViewModel @JvmOverloads constructor(
     application: Application,
     private val repository: ClipboardRepository = ClipboardRepository(
         ClipboardDatabase.getInstance(application).clipboardItemDao()
-    )
+    ),
+    val localWifiTransport: LocalWifiTransport = LocalWifiTransport()
 ) : AndroidViewModel(application) {
 
     private val localDevice = Device(
@@ -34,6 +37,18 @@ class MainViewModel @JvmOverloads constructor(
     )
 
     private val clipboardCore = ClipboardCoreManager.getInstance(application, repository)
+
+    private val _isWifiServerRunning = MutableStateFlow(false)
+    val isWifiServerRunning: StateFlow<Boolean> = _isWifiServerRunning.asStateFlow()
+
+    private val _incomingWifiMessages = MutableStateFlow<List<String>>(emptyList())
+    val incomingWifiMessages: StateFlow<List<String>> = _incomingWifiMessages.asStateFlow()
+
+    private val _wifiLastAckResult = MutableStateFlow<String?>(null)
+    val wifiLastAckResult: StateFlow<String?> = _wifiLastAckResult.asStateFlow()
+
+    private val _isSendingWifiHandshake = MutableStateFlow(false)
+    val isSendingWifiHandshake: StateFlow<Boolean> = _isSendingWifiHandshake.asStateFlow()
 
     val isCaptureActive: StateFlow<Boolean> = clipboardCore.isCaptureActive
 
@@ -69,6 +84,13 @@ class MainViewModel @JvmOverloads constructor(
             }
         }
         startClipboardCapture()
+
+        // Observe incoming wifi transport messages for diagnostic log display
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.incomingMessages.collect { msg ->
+                _incomingWifiMessages.value = _incomingWifiMessages.value + msg
+            }
+        }
     }
 
     fun addClipboardItem(text: String) {
@@ -146,5 +168,45 @@ class MainViewModel @JvmOverloads constructor(
 
     fun setWifiSyncEnabled(enabled: Boolean) {
         _isWifiSyncEnabled.value = enabled
+    }
+
+    // Milestone 5.1 Diagnostic Methods
+    fun startWifiServer() {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.startServer()
+            _isWifiServerRunning.value = localWifiTransport.isAvailable
+        }
+    }
+
+    fun stopWifiServer() {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.stopServer()
+            _isWifiServerRunning.value = localWifiTransport.isAvailable
+        }
+    }
+
+    fun sendHandshake(targetIp: String, message: String = "HELLO_FROM_PHONE_A", targetPort: Int = LocalWifiTransport.DEFAULT_PORT) {
+        if (targetIp.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isSendingWifiHandshake.value = true
+            _wifiLastAckResult.value = "Sending..."
+            val ack = localWifiTransport.sendHandshake(
+                targetIp = targetIp.trim(),
+                targetPort = targetPort,
+                message = message
+            )
+            _wifiLastAckResult.value = ack ?: "ERROR: Connection failed or timed out"
+            _isSendingWifiHandshake.value = false
+        }
+    }
+
+    fun clearWifiDiagnosticLogs() {
+        _incomingWifiMessages.value = emptyList()
+        _wifiLastAckResult.value = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        localWifiTransport.stopServer()
     }
 }

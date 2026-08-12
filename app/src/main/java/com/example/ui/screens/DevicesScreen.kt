@@ -19,7 +19,16 @@ import com.example.data.model.Device
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesScreen(
-    devices: List<Device>
+    devices: List<Device>,
+    isServerRunning: Boolean = false,
+    listeningPort: Int = com.example.sync.transport.LocalWifiTransport.DEFAULT_PORT,
+    incomingMessages: List<String> = emptyList(),
+    lastAckResult: String? = null,
+    isSendingHandshake: Boolean = false,
+    onStartServer: () -> Unit = {},
+    onStopServer: () -> Unit = {},
+    onSendHandshake: (targetIp: String, message: String) -> Unit = { _, _ -> },
+    onClearLogs: () -> Unit = {}
 ) {
     val localDevice = devices.firstOrNull { it.isLocalDevice }
     val pairedDevices = devices.filter { !it.isLocalDevice && it.isPaired }
@@ -28,7 +37,7 @@ fun DevicesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Devices & Pairing", fontWeight = FontWeight.Bold) },
+                title = { Text("Devices & Diagnostic", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
@@ -42,6 +51,21 @@ fun DevicesScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Milestone 5.1 Temporary Diagnostic Card
+            item {
+                Milestone51DiagnosticCard(
+                    isServerRunning = isServerRunning,
+                    listeningPort = listeningPort,
+                    incomingMessages = incomingMessages,
+                    lastAckResult = lastAckResult,
+                    isSendingHandshake = isSendingHandshake,
+                    onStartServer = onStartServer,
+                    onStopServer = onStopServer,
+                    onSendHandshake = onSendHandshake,
+                    onClearLogs = onClearLogs
+                )
+            }
+
             // Local Device Section
             item {
                 Text(

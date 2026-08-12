@@ -44,6 +44,12 @@ fun MainNavGraph(
     val isBluetoothSyncEnabled by viewModel.isBluetoothSyncEnabled.collectAsState()
     val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
 
+    // Milestone 5.1 Diagnostic States
+    val isWifiServerRunning by viewModel.isWifiServerRunning.collectAsState()
+    val incomingWifiMessages by viewModel.incomingWifiMessages.collectAsState()
+    val wifiLastAckResult by viewModel.wifiLastAckResult.collectAsState()
+    val isSendingWifiHandshake by viewModel.isSendingWifiHandshake.collectAsState()
+
     val onCopyText: (String) -> Unit = { text ->
         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clip = android.content.ClipData.newPlainText("Universal Clipboard", text)
@@ -109,7 +115,15 @@ fun MainNavGraph(
                 }
                 NavigationTab.DEVICES -> {
                     DevicesScreen(
-                        devices = devices
+                        devices = devices,
+                        isServerRunning = isWifiServerRunning,
+                        incomingMessages = incomingWifiMessages,
+                        lastAckResult = wifiLastAckResult,
+                        isSendingHandshake = isSendingWifiHandshake,
+                        onStartServer = viewModel::startWifiServer,
+                        onStopServer = viewModel::stopWifiServer,
+                        onSendHandshake = viewModel::sendHandshake,
+                        onClearLogs = viewModel::clearWifiDiagnosticLogs
                     )
                 }
                 NavigationTab.SETTINGS -> {
