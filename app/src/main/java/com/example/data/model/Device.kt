@@ -7,6 +7,7 @@ data class Device(
     val deviceId: String,
     val deviceName: String,
     val deviceType: String = "PHONE", // PHONE, TABLET, LAPTOP, DESKTOP
+    val ipAddress: String? = null,
     val publicKey: String? = null,
     val lastSeen: Long = System.currentTimeMillis(),
     val pairedAt: Long? = null,

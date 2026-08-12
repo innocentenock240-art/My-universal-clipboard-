@@ -44,8 +44,10 @@ fun MainNavGraph(
     val isBluetoothSyncEnabled by viewModel.isBluetoothSyncEnabled.collectAsState()
     val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
 
-    // Milestone 5.1 Diagnostic States
+    // Milestone 5.1 & 5.2 States
     val isWifiServerRunning by viewModel.isWifiServerRunning.collectAsState()
+    val isWifiDiscovering by viewModel.isWifiDiscovering.collectAsState()
+    val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val incomingWifiMessages by viewModel.incomingWifiMessages.collectAsState()
     val wifiLastAckResult by viewModel.wifiLastAckResult.collectAsState()
     val isSendingWifiHandshake by viewModel.isSendingWifiHandshake.collectAsState()
@@ -116,10 +118,14 @@ fun MainNavGraph(
                 NavigationTab.DEVICES -> {
                     DevicesScreen(
                         devices = devices,
+                        discoveredDevices = discoveredDevices,
+                        isDiscovering = isWifiDiscovering,
                         isServerRunning = isWifiServerRunning,
                         incomingMessages = incomingWifiMessages,
                         lastAckResult = wifiLastAckResult,
                         isSendingHandshake = isSendingWifiHandshake,
+                        onStartDiscovery = viewModel::startWifiDiscovery,
+                        onStopDiscovery = viewModel::stopWifiDiscovery,
                         onStartServer = viewModel::startWifiServer,
                         onStopServer = viewModel::stopWifiServer,
                         onSendHandshake = viewModel::sendHandshake,

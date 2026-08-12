@@ -78,4 +78,27 @@ class MainViewModelDiagnosticTest {
         receiverViewModel.stopWifiServer()
         senderViewModel.stopWifiServer()
     }
+
+    @Test
+    fun testWifiDiscoveryInViewModel() = runBlocking {
+        val transport = LocalWifiTransport(port = 54334)
+        val viewModel = MainViewModel(
+            application = ApplicationProvider.getApplicationContext(),
+            localWifiTransport = transport
+        )
+
+        assertFalse(viewModel.isWifiDiscovering.value)
+
+        viewModel.startWifiDiscovery()
+        withTimeout(2000) {
+            viewModel.isWifiDiscovering.first { it }
+        }
+        assertTrue(viewModel.isWifiDiscovering.value)
+
+        viewModel.stopWifiDiscovery()
+        withTimeout(2000) {
+            viewModel.isWifiDiscovering.first { !it }
+        }
+        assertFalse(viewModel.isWifiDiscovering.value)
+    }
 }

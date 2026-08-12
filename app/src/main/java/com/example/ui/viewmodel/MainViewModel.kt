@@ -24,7 +24,7 @@ class MainViewModel @JvmOverloads constructor(
     private val repository: ClipboardRepository = ClipboardRepository(
         ClipboardDatabase.getInstance(application).clipboardItemDao()
     ),
-    val localWifiTransport: LocalWifiTransport = LocalWifiTransport()
+    val localWifiTransport: LocalWifiTransport = LocalWifiTransport(context = application)
 ) : AndroidViewModel(application) {
 
     private val localDevice = Device(
@@ -40,6 +40,11 @@ class MainViewModel @JvmOverloads constructor(
 
     private val _isWifiServerRunning = MutableStateFlow(false)
     val isWifiServerRunning: StateFlow<Boolean> = _isWifiServerRunning.asStateFlow()
+
+    private val _isWifiDiscovering = MutableStateFlow(false)
+    val isWifiDiscovering: StateFlow<Boolean> = _isWifiDiscovering.asStateFlow()
+
+    val discoveredDevices: StateFlow<List<Device>> = localWifiTransport.discoveredDevices
 
     private val _incomingWifiMessages = MutableStateFlow<List<String>>(emptyList())
     val incomingWifiMessages: StateFlow<List<String>> = _incomingWifiMessages.asStateFlow()
@@ -168,6 +173,23 @@ class MainViewModel @JvmOverloads constructor(
 
     fun setWifiSyncEnabled(enabled: Boolean) {
         _isWifiSyncEnabled.value = enabled
+    }
+
+    // Milestone 5.2 Local Wi-Fi Discovery Methods
+    fun startWifiDiscovery() {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.startDiscovery()
+            _isWifiDiscovering.value = true
+            _isWifiServerRunning.value = localWifiTransport.isAvailable
+        }
+    }
+
+    fun stopWifiDiscovery() {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.stopDiscovery()
+            _isWifiDiscovering.value = false
+            _isWifiServerRunning.value = localWifiTransport.isAvailable
+        }
     }
 
     // Milestone 5.1 Diagnostic Methods

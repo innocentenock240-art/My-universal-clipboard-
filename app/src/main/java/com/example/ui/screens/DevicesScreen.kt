@@ -20,11 +20,15 @@ import com.example.data.model.Device
 @Composable
 fun DevicesScreen(
     devices: List<Device>,
+    discoveredDevices: List<Device> = emptyList(),
+    isDiscovering: Boolean = false,
     isServerRunning: Boolean = false,
     listeningPort: Int = com.example.sync.transport.LocalWifiTransport.DEFAULT_PORT,
     incomingMessages: List<String> = emptyList(),
     lastAckResult: String? = null,
     isSendingHandshake: Boolean = false,
+    onStartDiscovery: () -> Unit = {},
+    onStopDiscovery: () -> Unit = {},
     onStartServer: () -> Unit = {},
     onStopServer: () -> Unit = {},
     onSendHandshake: (targetIp: String, message: String) -> Unit = { _, _ -> },
@@ -32,7 +36,6 @@ fun DevicesScreen(
 ) {
     val localDevice = devices.firstOrNull { it.isLocalDevice }
     val pairedDevices = devices.filter { !it.isLocalDevice && it.isPaired }
-    val discoveredDevices = devices.filter { !it.isLocalDevice && !it.isPaired }
 
     Scaffold(
         topBar = {
@@ -81,11 +84,12 @@ fun DevicesScreen(
                 }
             }
 
-            // Local Network Discovery Status Card
+            // Milestone 5.2 Discovery Control Card
             item {
                 Card(
+                    modifier = Modifier.fillMaxWidth().testTag("discovery_control_card"),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
@@ -94,20 +98,74 @@ fun DevicesScreen(
                             .fillMaxWidth()
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = "Local network mDNS/NSD device discovery will be enabled in Milestone 5. Cryptographic pairing follows in Milestone 6.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Local Network Discovery (mDNS)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isDiscovering) "Status: Discovering nearby peers..." else "Status: Discovery idle",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (isDiscovering) {
+                            OutlinedButton(
+                                onClick = onStopDiscovery,
+                                modifier = Modifier.testTag("stop_discovery_button")
+                            ) {
+                                Text("Stop", fontSize = 12.sp)
+                            }
+                        } else {
+                            Button(
+                                onClick = onStartDiscovery,
+                                modifier = Modifier.testTag("start_discovery_button")
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Discover", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Discovered Nearby Devices Section (Milestone 5.2)
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Discovered Nearby Devices (${discoveredDevices.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isDiscovering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
                         )
                     }
+                }
+            }
+
+            if (discoveredDevices.isEmpty()) {
+                item {
+                    Text(
+                        text = "No nearby devices discovered yet. Tap 'Discover' above or ensure Phone B has started discovery on the same Wi-Fi.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                items(discoveredDevices, key = { it.deviceId }) { device ->
+                    DiscoveredDeviceCard(device = device)
                 }
             }
 
@@ -123,7 +181,7 @@ fun DevicesScreen(
             if (pairedDevices.isEmpty()) {
                 item {
                     Text(
-                        text = "No paired devices yet. Nearby devices on your Wi-Fi will appear below.",
+                        text = "No trusted paired devices. Device pairing will be implemented in Milestone 6.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 14.sp
                     )
@@ -134,30 +192,104 @@ fun DevicesScreen(
                 }
             }
 
-            // Discovered Nearby Devices Section
-            item {
+            item { Spacer(modifier = Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+fun DiscoveredDeviceCard(
+    device: Device
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("discovered_device_card_${device.deviceId}"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Smartphone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = device.deviceName,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = "Device ID: ${device.deviceId}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "Available",
+                        modifier = Modifier
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                            .testTag("device_status_${device.deviceId}"),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(
-                    text = "Discovered Nearby on Wi-Fi (${discoveredDevices.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    text = "IP Address:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = device.ipAddress ?: "Unknown IP",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("device_ip_${device.deviceId}")
                 )
             }
 
-            if (discoveredDevices.isEmpty()) {
-                item {
-                    Text(
-                        text = "No unpaired devices detected on local network.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp
-                    )
-                }
-            } else {
-                items(discoveredDevices, key = { it.deviceId }) { device ->
-                    DeviceItemCard(device = device, isLocal = false)
-                }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Transport:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Local Wi-Fi",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
-
-            item { Spacer(modifier = Modifier.height(24.dp)) }
         }
     }
 }
