@@ -1,10 +1,11 @@
 package com.example.keyboard
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,11 +22,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Pin
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -41,23 +47,33 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.ClipboardItem
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KeyboardScreen(
     clipboardItems: List<ClipboardItem>,
     onInsertText: (String) -> Unit,
     onBackspace: () -> Unit,
     onEnter: () -> Unit,
+    onDeleteItem: ((String) -> Unit)? = null,
+    onDeleteItems: ((List<String>) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var isClipboardMode by remember { mutableStateOf(false) }
     var isShiftActive by remember { mutableStateOf(false) }
+
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedItemIds by remember { mutableStateOf(setOf<String>()) }
 
     Surface(
         modifier = modifier
@@ -80,36 +96,103 @@ fun KeyboardScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Clipboard Toggle Button
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    IconButton(
-                        onClick = { isClipboardMode = !isClipboardMode },
-                        modifier = Modifier.testTag("toggle_clipboard_btn")
+                if (isClipboardMode && isSelectionMode) {
+                    // Selection Mode Header
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isClipboardMode) Icons.Default.Keyboard else Icons.Default.Assignment,
-                            contentDescription = if (isClipboardMode) "Switch to Keyboard" else "Open Clipboard History",
-                            tint = if (isClipboardMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        IconButton(
+                            onClick = {
+                                isSelectionMode = false
+                                selectedItemIds = emptySet()
+                            },
+                            modifier = Modifier.testTag("cancel_selection_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Cancel Selection"
+                            )
+                        }
+                        Text(
+                            text = "Selected (${selectedItemIds.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
 
-                    Text(
-                        text = if (isClipboardMode) "Clipboard History (${clipboardItems.size})" else "Keyboard",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                selectedItemIds = clipboardItems.map { it.id }.toSet()
+                            },
+                            modifier = Modifier.testTag("select_all_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SelectAll,
+                                contentDescription = "Select All"
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (selectedItemIds.isNotEmpty()) {
+                                    onDeleteItems?.invoke(selectedItemIds.toList())
+                                    isSelectionMode = false
+                                    selectedItemIds = emptySet()
+                                }
+                            },
+                            enabled = selectedItemIds.isNotEmpty(),
+                            modifier = Modifier.testTag("delete_selected_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Selected",
+                                tint = if (selectedItemIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                } else {
+                    // Standard Header
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                isClipboardMode = !isClipboardMode
+                                if (!isClipboardMode) {
+                                    isSelectionMode = false
+                                    selectedItemIds = emptySet()
+                                }
+                            },
+                            modifier = Modifier.testTag("toggle_clipboard_btn")
+                        ) {
+                            Icon(
+                                imageVector = if (isClipboardMode) Icons.Default.Keyboard else Icons.Default.Assignment,
+                                contentDescription = if (isClipboardMode) "Switch to Keyboard" else "Open Clipboard History",
+                                tint = if (isClipboardMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-                if (isClipboardMode) {
-                    Text(
-                        text = "Tap item to insert",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                        Text(
+                            text = if (isClipboardMode) "Clipboard History (${clipboardItems.size})" else "Keyboard",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (isClipboardMode) {
+                        Text(
+                            text = "Long press to select",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                 }
             }
 
@@ -117,8 +200,25 @@ fun KeyboardScreen(
             if (isClipboardMode) {
                 ClipboardPanel(
                     clipboardItems = clipboardItems,
+                    isSelectionMode = isSelectionMode,
+                    selectedItemIds = selectedItemIds,
                     onItemClick = { item ->
-                        onInsertText(item.content)
+                        if (isSelectionMode) {
+                            selectedItemIds = if (selectedItemIds.contains(item.id)) {
+                                selectedItemIds - item.id
+                            } else {
+                                selectedItemIds + item.id
+                            }
+                            if (selectedItemIds.isEmpty()) {
+                                isSelectionMode = false
+                            }
+                        } else {
+                            onInsertText(item.content)
+                        }
+                    },
+                    onItemLongClick = { item ->
+                        isSelectionMode = true
+                        selectedItemIds = selectedItemIds + item.id
                     }
                 )
             } else {
@@ -139,10 +239,14 @@ fun KeyboardScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ClipboardPanel(
     clipboardItems: List<ClipboardItem>,
-    onItemClick: (ClipboardItem) -> Unit
+    isSelectionMode: Boolean = false,
+    selectedItemIds: Set<String> = emptySet(),
+    onItemClick: (ClipboardItem) -> Unit,
+    onItemLongClick: (ClipboardItem) -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -180,13 +284,18 @@ fun ClipboardPanel(
                     items = clipboardItems,
                     key = { it.id }
                 ) { item ->
+                    val isSelected = selectedItemIds.contains(item.id)
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onItemClick(item) }
+                            .combinedClickable(
+                                onClick = { onItemClick(item) },
+                                onLongClick = { onItemLongClick(item) }
+                            )
                             .testTag("clipboard_item_${item.id}"),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
+                            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surface
                         ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -197,13 +306,24 @@ fun ClipboardPanel(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            if (isSelectionMode) {
+                                Icon(
+                                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                                    contentDescription = if (isSelected) "Selected" else "Not Selected",
+                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .padding(end = 6.dp)
+                                )
+                            }
+
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = item.content,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                                 )
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -309,7 +429,7 @@ fun QwertyKeyboardLayout(
         ) {
             // Shift Key
             SpecialKeyButton(
-                text = if (isShiftActive) "⇧" else "⇧",
+                text = "⇧",
                 isHighlighted = isShiftActive,
                 onClick = onToggleShift,
                 modifier = Modifier
@@ -325,7 +445,7 @@ fun QwertyKeyboardLayout(
                 )
             }
 
-            // Backspace Key
+            // Backspace Key with continuous repeating acceleration gesture
             SpecialKeyButton(
                 icon = {
                     Icon(
@@ -335,6 +455,7 @@ fun QwertyKeyboardLayout(
                     )
                 },
                 onClick = onBackspace,
+                isRepeating = true,
                 modifier = Modifier
                     .weight(1.5f)
                     .testTag("key_backspace")
@@ -426,14 +547,49 @@ fun KeyButton(
     }
 }
 
+fun Modifier.repeatingClickable(
+    initialDelayMillis: Long = 350L,
+    minDelayMillis: Long = 40L,
+    onClick: () -> Unit
+): Modifier = this.pointerInput(Unit) {
+    coroutineScope {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            onClick()
+            val job = launch {
+                delay(initialDelayMillis)
+                var currentDelay = 120L
+                while (true) {
+                    onClick()
+                    delay(currentDelay)
+                    if (currentDelay > minDelayMillis) {
+                        currentDelay = (currentDelay * 0.85f).toLong().coerceAtLeast(minDelayMillis)
+                    }
+                }
+            }
+            do {
+                val event = awaitPointerEvent()
+            } while (event.changes.any { it.pressed })
+            job.cancel()
+        }
+    }
+}
+
 @Composable
 fun SpecialKeyButton(
     text: String? = null,
     icon: (@Composable () -> Unit)? = null,
     isHighlighted: Boolean = false,
+    isRepeating: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val clickModifier = if (isRepeating) {
+        Modifier.repeatingClickable(onClick = onClick)
+    } else {
+        Modifier.clickable { onClick() }
+    }
+
     Box(
         modifier = modifier
             .height(42.dp)
@@ -442,7 +598,7 @@ fun SpecialKeyButton(
                 if (isHighlighted) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant
             )
-            .clickable { onClick() },
+            .then(clickModifier),
         contentAlignment = Alignment.Center
     ) {
         if (text != null) {

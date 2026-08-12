@@ -19,6 +19,9 @@ interface ClipboardItemDao {
     @Query("DELETE FROM clipboard_items WHERE id = :id")
     suspend fun deleteItemById(id: String)
 
+    @Query("DELETE FROM clipboard_items WHERE id IN (:ids)")
+    suspend fun deleteItemsByIds(ids: List<String>)
+
     @Query("DELETE FROM clipboard_items WHERE expiresAt <= :currentTime")
     suspend fun deleteExpiredItems(currentTime: Long): Int
 

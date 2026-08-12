@@ -22,6 +22,12 @@ class ClipboardRepository(
         dao.deleteItemById(id)
     }
 
+    suspend fun deleteItemsByIds(ids: List<String>) {
+        if (ids.isNotEmpty()) {
+            dao.deleteItemsByIds(ids)
+        }
+    }
+
     suspend fun toggleFavorite(id: String, currentFavoriteState: Boolean) {
         dao.updateFavorite(id, !currentFavoriteState)
     }

@@ -212,4 +212,54 @@ class ClipboardDatabaseTest {
         val items = dao.observeAllItems().first()
         assertTrue(items.isEmpty())
     }
+
+    @Test
+    fun testDeleteItemsByIds() = runBlocking {
+        val item1 = ClipboardItemEntity(
+            id = "bulk_1",
+            sourceDeviceId = "dev_local",
+            sourceDeviceName = "Test Phone",
+            type = "TEXT",
+            content = "Bulk 1",
+            createdAt = 1000L,
+            expiresAt = 5000L,
+            hash = "h1",
+            isFavorite = false,
+            isPinned = false
+        )
+        val item2 = ClipboardItemEntity(
+            id = "bulk_2",
+            sourceDeviceId = "dev_local",
+            sourceDeviceName = "Test Phone",
+            type = "TEXT",
+            content = "Bulk 2",
+            createdAt = 2000L,
+            expiresAt = 5000L,
+            hash = "h2",
+            isFavorite = false,
+            isPinned = false
+        )
+        val item3 = ClipboardItemEntity(
+            id = "bulk_3",
+            sourceDeviceId = "dev_local",
+            sourceDeviceName = "Test Phone",
+            type = "TEXT",
+            content = "Bulk 3",
+            createdAt = 3000L,
+            expiresAt = 5000L,
+            hash = "h3",
+            isFavorite = false,
+            isPinned = false
+        )
+
+        dao.insertItem(item1)
+        dao.insertItem(item2)
+        dao.insertItem(item3)
+
+        dao.deleteItemsByIds(listOf("bulk_1", "bulk_3"))
+
+        val remaining = dao.observeAllItems().first()
+        assertEquals(1, remaining.size)
+        assertEquals("bulk_2", remaining[0].id)
+    }
 }

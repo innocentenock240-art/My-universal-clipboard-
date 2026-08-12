@@ -12,6 +12,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.model.ClipboardItem
 import org.junit.Assert.assertEquals
@@ -132,5 +134,80 @@ class UniversalClipboardInputMethodServiceTest {
         // Toggle to Clipboard History mode
         composeTestRule.onNodeWithTag("toggle_clipboard_btn").performClick()
         composeTestRule.onNodeWithText("No clipboard history found").assertIsDisplayed()
+    }
+
+    @Test
+    fun testMultiSelectAndBulkDeleteUiFlow() {
+        var deletedIds: List<String> = emptyList()
+        val sampleItems = listOf(
+            ClipboardItem(
+                id = "item_1",
+                sourceDeviceId = "dev_local",
+                sourceDeviceName = "Local Phone",
+                type = "TEXT",
+                content = "Code snippet 1",
+                createdAt = System.currentTimeMillis(),
+                expiresAt = System.currentTimeMillis() + 600000
+            ),
+            ClipboardItem(
+                id = "item_2",
+                sourceDeviceId = "dev_local",
+                sourceDeviceName = "Local Phone",
+                type = "TEXT",
+                content = "Code snippet 2",
+                createdAt = System.currentTimeMillis(),
+                expiresAt = System.currentTimeMillis() + 600000
+            )
+        )
+
+        composeTestRule.setContent {
+            KeyboardScreen(
+                clipboardItems = sampleItems,
+                onInsertText = {},
+                onBackspace = {},
+                onEnter = {},
+                onDeleteItems = { deletedIds = it }
+            )
+        }
+
+        // Switch to Clipboard panel
+        composeTestRule.onNodeWithTag("toggle_clipboard_btn").performClick()
+
+        // Long press item_1 to activate selection mode
+        composeTestRule.onNodeWithTag("clipboard_item_item_1").performTouchInput {
+            longClick()
+        }
+
+        // Click select all button
+        composeTestRule.onNodeWithTag("select_all_btn").performClick()
+
+        // Click delete selected button
+        composeTestRule.onNodeWithTag("delete_selected_btn").performClick()
+
+        // Verify onDeleteItems called with both item IDs
+        assertEquals(2, deletedIds.size)
+        assertTrue(deletedIds.contains("item_1"))
+        assertTrue(deletedIds.contains("item_2"))
+    }
+
+    @Test
+    fun testBackspaceDeletesSelectedTextWhenTextIsSelected() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val editText = EditText(context)
+        editText.setText("Hello World")
+        editText.setSelection(0, 5) // Select "Hello"
+
+        val editorInfo = EditorInfo()
+        val realInputConnection = editText.onCreateInputConnection(editorInfo)
+
+        val service = object : UniversalClipboardInputMethodService() {
+            override fun getCurrentInputConnection(): InputConnection? {
+                return realInputConnection
+            }
+        }
+
+        service.handleBackspace()
+        // "Hello" selected, so backspace replaces selection with empty string -> " World"
+        assertEquals(" World", editText.text.toString())
     }
 }

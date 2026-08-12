@@ -76,6 +76,7 @@ class MainViewModel @JvmOverloads constructor(
                 Log.e("MainViewModel", "Failed to delete expired items on startup", e)
             }
         }
+        startClipboardCapture()
     }
 
     fun addClipboardItem(text: String) {
@@ -110,6 +111,16 @@ class MainViewModel @JvmOverloads constructor(
                 repository.deleteClipboardItem(itemId)
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to delete item $itemId", e)
+            }
+        }
+    }
+
+    fun deleteItems(itemIds: List<String>) {
+        viewModelScope.launch {
+            try {
+                repository.deleteItemsByIds(itemIds)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to bulk delete items", e)
             }
         }
     }
