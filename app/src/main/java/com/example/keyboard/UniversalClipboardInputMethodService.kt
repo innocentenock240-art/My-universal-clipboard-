@@ -7,6 +7,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Lifecycle
@@ -17,14 +18,11 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import com.example.data.clipboard.AndroidClipboardCaptureSource
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.database.ClipboardDatabase
 import com.example.data.model.ClipboardItem
 import com.example.data.repository.ClipboardRepository
 import com.example.ui.theme.UniversalClipboardTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -42,7 +40,6 @@ open class UniversalClipboardInputMethodService : InputMethodService(), Lifecycl
 
     var repository: ClipboardRepository? = null
     var clipboardCore: ClipboardCoreManager? = null
-    var captureSource: AndroidClipboardCaptureSource? = null
 
     open override fun getCurrentInputConnection(): InputConnection? {
         return super.getCurrentInputConnection()
@@ -57,17 +54,7 @@ open class UniversalClipboardInputMethodService : InputMethodService(), Lifecycl
             val db = ClipboardDatabase.getInstance(applicationContext)
             val repo = ClipboardRepository(db.clipboardItemDao())
             repository = repo
-
-            val source = AndroidClipboardCaptureSource(applicationContext)
-            captureSource = source
-            val core = ClipboardCoreManager(
-                captureSource = source,
-                repository = repo,
-                deviceId = "dev_local_${android.os.Build.MODEL.replace(" ", "_")}",
-                deviceName = if (android.os.Build.MODEL.isNullOrBlank()) "Local Device" else android.os.Build.MODEL
-            )
-            clipboardCore = core
-            core.startCapture()
+            clipboardCore = ClipboardCoreManager.getInstance(applicationContext, repo)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -91,6 +78,7 @@ open class UniversalClipboardInputMethodService : InputMethodService(), Lifecycl
 
             setContent {
                 UniversalClipboardTheme {
+                    val coroutineScope = rememberCoroutineScope()
                     val historyFlow: Flow<List<ClipboardItem>> = repository?.clipboardHistory ?: emptyFlow()
                     val clipboardItems by historyFlow.collectAsState(initial = emptyList())
 
@@ -100,12 +88,12 @@ open class UniversalClipboardInputMethodService : InputMethodService(), Lifecycl
                         onBackspace = { handleBackspace() },
                         onEnter = { handleEnter() },
                         onDeleteItem = { id ->
-                            CoroutineScope(Dispatchers.IO).launch {
+                            coroutineScope.launch {
                                 repository?.deleteClipboardItem(id)
                             }
                         },
                         onDeleteItems = { ids ->
-                            CoroutineScope(Dispatchers.IO).launch {
+                            coroutineScope.launch {
                                 repository?.deleteItemsByIds(ids)
                             }
                         }
@@ -154,7 +142,6 @@ open class UniversalClipboardInputMethodService : InputMethodService(), Lifecycl
     }
 
     override fun onDestroy() {
-        clipboardCore?.stopCapture()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
     }

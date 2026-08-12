@@ -120,6 +120,35 @@ class ClipboardCoreManager(
     companion object {
         private const val TAG = "ClipboardCoreManager"
 
+        @Volatile
+        private var INSTANCE: ClipboardCoreManager? = null
+
+        fun getInstance(
+            context: android.content.Context,
+            repository: ClipboardRepository
+        ): ClipboardCoreManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: run {
+                    val appContext = context.applicationContext
+                    val captureSource = AndroidClipboardCaptureSource(appContext)
+                    val modelName = android.os.Build.MODEL ?: ""
+                    val deviceId = "dev_local_${modelName.replace(" ", "_")}"
+                    val deviceName = if (modelName.isBlank()) "Local Device" else modelName
+
+                    val instance = ClipboardCoreManager(
+                        captureSource = captureSource,
+                        repository = repository,
+                        deviceId = deviceId,
+                        deviceName = deviceName,
+                        coroutineScope = CoroutineScope(Dispatchers.Default)
+                    )
+                    instance.startCapture()
+                    INSTANCE = instance
+                    instance
+                }
+            }
+        }
+
         /**
          * Deterministic SHA-256 hash generation for duplicate check and future item identity checks.
          */

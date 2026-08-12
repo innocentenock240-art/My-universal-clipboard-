@@ -33,15 +33,7 @@ class MainViewModel @JvmOverloads constructor(
         isPaired = true
     )
 
-    private val captureSource = AndroidClipboardCaptureSource(application)
-
-    private val clipboardCore = ClipboardCoreManager(
-        captureSource = captureSource,
-        repository = repository,
-        deviceId = localDevice.deviceId,
-        deviceName = localDevice.deviceName,
-        coroutineScope = viewModelScope
-    )
+    private val clipboardCore = ClipboardCoreManager.getInstance(application, repository)
 
     val isCaptureActive: StateFlow<Boolean> = clipboardCore.isCaptureActive
 
