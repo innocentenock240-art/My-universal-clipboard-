@@ -117,7 +117,6 @@ class LocalWifiTransport(
 
     override suspend fun startDiscovery() {
         startServer()
-        startNsdAdvertisement()
         startNsdDiscovery()
     }
 
@@ -174,7 +173,8 @@ class LocalWifiTransport(
     }
 
     fun startNsdAdvertisement() {
-        if (isNsdAdvertising || nsdManager == null) return
+        if (isNsdAdvertising || nsdRegistrationListener != null || nsdManager == null) return
+        acquireMulticastLock()
         try {
             val listeningPort = serverSocket?.localPort ?: this@LocalWifiTransport.port
             val serviceInfo = NsdServiceInfo().apply {
@@ -199,28 +199,39 @@ class LocalWifiTransport(
 
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                     isNsdAdvertising = false
+                    nsdRegistrationListener = null
                     Log.e(TAG, "NSD Service registration failed with errorCode: $errorCode")
+                    releaseMulticastLock()
                 }
 
                 override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
                     isNsdAdvertising = false
+                    nsdRegistrationListener = null
                     Log.i(TAG, "NSD Service unregistered: ${serviceInfo.serviceName}")
+                    releaseMulticastLock()
                 }
 
                 override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                     isNsdAdvertising = false
+                    nsdRegistrationListener = null
                     Log.e(TAG, "NSD Service unregistration failed with errorCode: $errorCode")
+                    releaseMulticastLock()
                 }
             }
 
             nsdManager?.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, nsdRegistrationListener)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register NSD advertisement", e)
+            nsdRegistrationListener = null
+            releaseMulticastLock()
         }
     }
 
     fun stopNsdAdvertisement() {
-        if (!isNsdAdvertising && nsdRegistrationListener == null) return
+        if (!isNsdAdvertising && nsdRegistrationListener == null) {
+            releaseMulticastLock()
+            return
+        }
         try {
             nsdRegistrationListener?.let { listener ->
                 nsdManager?.unregisterService(listener)
@@ -230,6 +241,7 @@ class LocalWifiTransport(
         } finally {
             nsdRegistrationListener = null
             isNsdAdvertising = false
+            releaseMulticastLock()
         }
     }
 
@@ -328,9 +340,11 @@ class LocalWifiTransport(
 
     private fun releaseMulticastLock() {
         try {
-            if (multicastLock?.isHeld == true) {
-                multicastLock?.release()
-                Log.i(TAG, "MulticastLock released")
+            if (!isNsdDiscovering && !isNsdAdvertising && nsdDiscoveryListener == null && nsdRegistrationListener == null) {
+                if (multicastLock?.isHeld == true) {
+                    multicastLock?.release()
+                    Log.i(TAG, "MulticastLock released")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to release MulticastLock", e)
@@ -350,9 +364,22 @@ class LocalWifiTransport(
             val nextService = resolveQueue.poll() ?: return
             isResolving = true
             Log.i(TAG, "NSD Service resolution started for ${nextService.serviceName}")
+
+            val resolveTimeoutJob = scope.launch {
+                kotlinx.coroutines.delay(5000)
+                synchronized(resolveQueue) {
+                    if (isResolving) {
+                        Log.w(TAG, "NSD Resolve timed out after 5s for ${nextService.serviceName}")
+                        isResolving = false
+                        processNextResolve()
+                    }
+                }
+            }
+
             try {
                 nsdManager?.resolveService(nextService, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                        resolveTimeoutJob.cancel()
                         Log.e(TAG, "NSD Resolve failed for ${serviceInfo.serviceName} with errorCode: $errorCode")
                         synchronized(resolveQueue) {
                             isResolving = false
@@ -361,6 +388,7 @@ class LocalWifiTransport(
                     }
 
                     override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                        resolveTimeoutJob.cancel()
                         Log.i(TAG, "NSD Service resolved: ${serviceInfo.serviceName}, host=${serviceInfo.host}, port=${serviceInfo.port}")
                         handleResolvedService(serviceInfo)
                         synchronized(resolveQueue) {
@@ -370,6 +398,7 @@ class LocalWifiTransport(
                     }
                 })
             } catch (e: Exception) {
+                resolveTimeoutJob.cancel()
                 Log.e(TAG, "Failed to invoke resolveService for ${nextService.serviceName}", e)
                 isResolving = false
                 processNextResolve()
