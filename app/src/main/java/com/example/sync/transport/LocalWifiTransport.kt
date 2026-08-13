@@ -595,7 +595,7 @@ class LocalWifiTransport(
         return withContext(Dispatchers.IO) {
             val jsonPayload = item.toJsonString()
 
-            // Resolve target devices
+            // Resolve target devices and target ports
             val targets = if (targetDeviceId.isNotBlank() && targetDeviceId.contains(".")) {
                 listOf(Device(deviceId = "target_ip", deviceName = "Target IP Device", ipAddress = targetDeviceId))
             } else if (targetDeviceId.isNotBlank() && targetDeviceId != "ALL") {
@@ -611,25 +611,28 @@ class LocalWifiTransport(
 
             var sentSuccessfully = false
             for (device in targets) {
-                val ip = device.ipAddress ?: continue
+                val rawIp = device.ipAddress ?: continue
+                val targetIp = if (rawIp.contains(":")) rawIp.substringBefore(":") else rawIp
+                val targetPort = if (rawIp.contains(":")) rawIp.substringAfter(":").toIntOrNull() ?: port else port
+
                 var socket: Socket? = null
                 try {
-                    socket = Socket(ip, port)
+                    socket = Socket(targetIp, targetPort)
                     socket.soTimeout = 5000
                     val writer = PrintWriter(socket.getOutputStream(), true)
                     val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
 
                     writer.println(jsonPayload)
-                    Log.d(TAG, "Sent ClipboardItem ${item.id} to $ip:$port")
+                    Log.d(TAG, "Sent ClipboardItem ${item.id} to $targetIp:$targetPort")
 
                     val ack = reader.readLine()
-                    Log.d(TAG, "Received ACK '$ack' for item ${item.id} from $ip:$port")
+                    Log.d(TAG, "Received ACK '$ack' for item ${item.id} from $targetIp:$targetPort")
 
                     if (ack == "ACK_OK" || ack == "ACK_DUPLICATE_SKIPPED" || ack == "ACK_ECHO_SKIPPED" || ack?.startsWith("ACK_") == true) {
                         sentSuccessfully = true
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to send ClipboardItem ${item.id} to $ip:$port", e)
+                    Log.e(TAG, "Failed to send ClipboardItem ${item.id} to $targetIp:$targetPort", e)
                 } finally {
                     try {
                         socket?.close()

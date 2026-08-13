@@ -10,6 +10,7 @@ import com.example.data.database.ClipboardDatabase
 import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
 import com.example.data.repository.ClipboardRepository
+import com.example.sync.SyncEngine
 import com.example.sync.transport.LocalWifiTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,8 @@ class MainViewModel @JvmOverloads constructor(
     private val repository: ClipboardRepository = ClipboardRepository(
         ClipboardDatabase.getInstance(application).clipboardItemDao()
     ),
-    val localWifiTransport: LocalWifiTransport = LocalWifiTransport(context = application)
+    val localWifiTransport: LocalWifiTransport = LocalWifiTransport(context = application),
+    val syncEngine: SyncEngine = SyncEngine(listOf(localWifiTransport))
 ) : AndroidViewModel(application) {
 
     private val localDevice = Device(
@@ -89,6 +91,28 @@ class MainViewModel @JvmOverloads constructor(
             }
         }
         startClipboardCapture()
+
+        // Wire local clipboard capture to SyncEngine for auto-broadcasting
+        clipboardCore.onItemProcessedListener = { item ->
+            if (_isWifiSyncEnabled.value) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    syncEngine.syncClipboardItem(item)
+                }
+            }
+        }
+
+        // Observe incoming sync items from remote peers and persist in repository
+        viewModelScope.launch(Dispatchers.IO) {
+            syncEngine.observeIncomingItems().collect { incomingItem ->
+                try {
+                    clipboardCore.updateLastCapturedHash(incomingItem.hash)
+                    repository.insertClipboardItem(incomingItem)
+                    Log.i("MainViewModel", "Persisted remote ClipboardItem [ID: ${incomingItem.id}] from ${incomingItem.sourceDeviceName}")
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to persist remote ClipboardItem ${incomingItem.id}", e)
+                }
+            }
+        }
 
         // Observe incoming wifi transport messages for diagnostic log display
         viewModelScope.launch(Dispatchers.IO) {
