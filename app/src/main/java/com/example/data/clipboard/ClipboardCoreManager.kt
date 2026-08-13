@@ -47,6 +47,16 @@ class ClipboardCoreManager(
         lastCapturedHash = hash
     }
 
+    /**
+     * Apply a remote clipboard item to the local system clipboard while updating lastCapturedHash to prevent echo loops.
+     */
+    fun applyRemoteClipboardItem(item: ClipboardItem) {
+        if (item.content.isBlank()) return
+        val itemHash = item.hash.ifBlank { computeSha256(item.content) }
+        lastCapturedHash = itemHash
+        captureSource.setClipText(item.content)
+    }
+
     private val _isCaptureActive = MutableStateFlow(false)
     val isCaptureActive: StateFlow<Boolean> = _isCaptureActive.asStateFlow()
 

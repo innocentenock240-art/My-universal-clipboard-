@@ -10,10 +10,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.ConnectionState
 import com.example.data.model.Device
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,7 +34,9 @@ fun DevicesScreen(
     onStartServer: () -> Unit = {},
     onStopServer: () -> Unit = {},
     onSendHandshake: (targetIp: String, message: String) -> Unit = { _, _ -> },
-    onClearLogs: () -> Unit = {}
+    onClearLogs: () -> Unit = {},
+    onConnectDevice: (Device) -> Unit = {},
+    onDisconnectDevice: (Device) -> Unit = {}
 ) {
     val localDevice = devices.firstOrNull { it.isLocalDevice }
     val pairedDevices = devices.filter { !it.isLocalDevice && it.isPaired }
@@ -165,7 +169,11 @@ fun DevicesScreen(
                 }
             } else {
                 items(discoveredDevices, key = { it.deviceId }) { device ->
-                    DiscoveredDeviceCard(device = device)
+                    DiscoveredDeviceCard(
+                        device = device,
+                        onConnect = onConnectDevice,
+                        onDisconnect = onDisconnectDevice
+                    )
                 }
             }
 
@@ -199,8 +207,32 @@ fun DevicesScreen(
 
 @Composable
 fun DiscoveredDeviceCard(
-    device: Device
+    device: Device,
+    onConnect: (Device) -> Unit = {},
+    onDisconnect: (Device) -> Unit = {}
 ) {
+    val statusText = when (device.connectionState) {
+        ConnectionState.CONNECTED -> "CONNECTED"
+        ConnectionState.CONNECTING -> "CONNECTING..."
+        ConnectionState.ERROR -> "ERROR"
+        ConnectionState.DISCONNECTED -> "DISCONNECTED"
+        ConnectionState.DISCOVERED -> "AVAILABLE"
+    }
+
+    val statusBgColor = when (device.connectionState) {
+        ConnectionState.CONNECTED -> Color(0xFF2E7D32)
+        ConnectionState.CONNECTING -> Color(0xFFE65100)
+        ConnectionState.ERROR -> Color(0xFFC62828)
+        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.surfaceVariant
+        ConnectionState.DISCOVERED -> MaterialTheme.colorScheme.primaryContainer
+    }
+
+    val statusTextColor = when (device.connectionState) {
+        ConnectionState.CONNECTED, ConnectionState.CONNECTING, ConnectionState.ERROR -> Color.White
+        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+        ConnectionState.DISCOVERED -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -241,17 +273,17 @@ fun DiscoveredDeviceCard(
                 }
 
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
+                    color = statusBgColor,
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
-                        text = "Available",
+                        text = statusText,
                         modifier = Modifier
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                             .testTag("device_status_${device.deviceId}"),
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        fontWeight = FontWeight.Bold,
+                        color = statusTextColor
                     )
                 }
             }
@@ -277,7 +309,8 @@ fun DiscoveredDeviceCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Transport:",
@@ -289,6 +322,55 @@ fun DiscoveredDeviceCard(
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            // Milestone 5.3 Connection Control Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                when (device.connectionState) {
+                    ConnectionState.CONNECTED -> {
+                        OutlinedButton(
+                            onClick = { onDisconnect(device) },
+                            modifier = Modifier.testTag("disconnect_button_${device.deviceId}"),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.PowerOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("DISCONNECT", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    ConnectionState.CONNECTING -> {
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.testTag("connecting_button_${device.deviceId}"),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("CONNECTING...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    else -> {
+                        Button(
+                            onClick = { onConnect(device) },
+                            modifier = Modifier.testTag("connect_button_${device.deviceId}"),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("CONNECT", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
     }

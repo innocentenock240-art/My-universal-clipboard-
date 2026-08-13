@@ -129,7 +129,9 @@ fun MainNavGraph(
                         onStartServer = viewModel::startWifiServer,
                         onStopServer = viewModel::stopWifiServer,
                         onSendHandshake = viewModel::sendHandshake,
-                        onClearLogs = viewModel::clearWifiDiagnosticLogs
+                        onClearLogs = viewModel::clearWifiDiagnosticLogs,
+                        onConnectDevice = viewModel::connectToDevice,
+                        onDisconnectDevice = viewModel::disconnectFromDevice
                     )
                 }
                 NavigationTab.SETTINGS -> {

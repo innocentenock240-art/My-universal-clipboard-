@@ -81,6 +81,17 @@ class AndroidClipboardCaptureSource(
         }
     }
 
+    override fun setClipText(text: String) {
+        val manager = clipboardManager ?: return
+        try {
+            val clipData = android.content.ClipData.newPlainText("Universal Clipboard", text)
+            manager.setPrimaryClip(clipData)
+            Log.d(TAG, "Updated Android system primary clip successfully")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update Android system clipboard: ${e.message}")
+        }
+    }
+
     companion object {
         private const val TAG = "AndroidClipCaptureSrc"
     }

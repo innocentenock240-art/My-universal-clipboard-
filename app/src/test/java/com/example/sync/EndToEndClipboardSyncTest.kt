@@ -190,7 +190,8 @@ class EndToEndClipboardSyncTest {
         val receiver = LocalWifiTransport(port = receiverPort)
         receiver.startServer()
 
-        val senderTransport = LocalWifiTransport(port = 55207)
+        val senderTransport = LocalWifiTransport(port = 55207, customDeviceId = "dev_sender_55207")
+        senderTransport.startServer()
         val syncEngine = SyncEngine(listOf(senderTransport))
 
         val content = "SyncEngine dispatch payload"

@@ -1,5 +1,13 @@
 package com.example.data.model
 
+enum class ConnectionState {
+    DISCOVERED,
+    CONNECTING,
+    CONNECTED,
+    DISCONNECTED,
+    ERROR
+}
+
 /**
  * Data class representing an authorized or discovered device in the network.
  */
@@ -13,5 +21,6 @@ data class Device(
     val pairedAt: Long? = null,
     val isLocalDevice: Boolean = false,
     val isOnline: Boolean = true,
-    val isPaired: Boolean = false
+    val isPaired: Boolean = false,
+    val connectionState: ConnectionState = ConnectionState.DISCOVERED
 )

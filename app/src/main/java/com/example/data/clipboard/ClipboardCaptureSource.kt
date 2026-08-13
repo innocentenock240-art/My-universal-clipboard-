@@ -29,4 +29,9 @@ interface ClipboardCaptureSource {
      * Force-check the current clipboard content.
      */
     fun checkCurrentClip()
+
+    /**
+     * Set/update system clipboard content.
+     */
+    fun setClipText(text: String)
 }

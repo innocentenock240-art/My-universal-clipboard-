@@ -25,6 +25,7 @@ import org.robolectric.RobolectricTestRunner
  */
 class FakeClipboardCaptureSource : ClipboardCaptureSource {
     var capturing = false
+    var lastSetClipText: String? = null
     private var listener: ((String) -> Unit)? = null
 
     override fun start() {
@@ -43,6 +44,10 @@ class FakeClipboardCaptureSource : ClipboardCaptureSource {
 
     override fun checkCurrentClip() {
         // No-op for fake
+    }
+
+    override fun setClipText(text: String) {
+        lastSetClipText = text
     }
 
     fun emitClipText(text: String) {
@@ -213,5 +218,29 @@ class ClipboardCoreManagerTest {
 
         val storedItems = repository.clipboardHistory.first()
         assertEquals(1, storedItems.size)
+    }
+
+    @Test
+    fun testApplyRemoteClipboardItemUpdatesHashAndSystemClip() {
+        val remoteContent = "Remote clip text from Phone B"
+        val remoteHash = ClipboardCoreManager.computeSha256(remoteContent)
+        val remoteItem = ClipboardItem(
+            id = "clip_remote_100",
+            sourceDeviceId = "dev_phone_b",
+            sourceDeviceName = "Phone B",
+            content = remoteContent,
+            hash = remoteHash
+        )
+
+        coreManager.applyRemoteClipboardItem(remoteItem)
+
+        // Verify capture source clip was set
+        assertEquals(remoteContent, fakeCaptureSource.lastSetClipText)
+        // Verify lastCapturedHash was updated to remote hash
+        assertEquals(remoteHash, coreManager.lastCapturedHash)
+
+        // Verify subsequent capture of same text is ignored as duplicate
+        val reCapturedResult = coreManager.processClipboardText(remoteContent)
+        assertNull(reCapturedResult)
     }
 }

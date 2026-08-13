@@ -105,9 +105,9 @@ class MainViewModel @JvmOverloads constructor(
         viewModelScope.launch(Dispatchers.IO) {
             syncEngine.observeIncomingItems().collect { incomingItem ->
                 try {
-                    clipboardCore.updateLastCapturedHash(incomingItem.hash)
+                    clipboardCore.applyRemoteClipboardItem(incomingItem)
                     repository.insertClipboardItem(incomingItem)
-                    Log.i("MainViewModel", "Persisted remote ClipboardItem [ID: ${incomingItem.id}] from ${incomingItem.sourceDeviceName}")
+                    Log.i("MainViewModel", "Persisted and applied remote ClipboardItem [ID: ${incomingItem.id}] from ${incomingItem.sourceDeviceName}")
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to persist remote ClipboardItem ${incomingItem.id}", e)
                 }
@@ -214,6 +214,19 @@ class MainViewModel @JvmOverloads constructor(
             localWifiTransport.stopDiscovery()
             _isWifiDiscovering.value = false
             _isWifiServerRunning.value = localWifiTransport.isAvailable
+        }
+    }
+
+    // Milestone 5.3 Peer Connection Methods
+    fun connectToDevice(device: Device) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.connectToDevice(device)
+        }
+    }
+
+    fun disconnectFromDevice(device: Device) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localWifiTransport.disconnectFromDevice(device.deviceId)
         }
     }
 

@@ -7,6 +7,7 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.model.ClipboardItem
+import com.example.data.model.ConnectionState
 import com.example.data.model.Device
 import com.example.sync.model.parseClipboardItemFromJson
 import com.example.sync.model.toJsonString
@@ -22,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
@@ -38,7 +40,8 @@ import java.util.UUID
  */
 class LocalWifiTransport(
     private val context: Context? = null,
-    private val port: Int = DEFAULT_PORT
+    private val port: Int = DEFAULT_PORT,
+    private val customDeviceId: String? = null
 ) : Transport {
 
     companion object {
@@ -63,6 +66,22 @@ class LocalWifiTransport(
 
     private val _discoveredDevices = MutableStateFlow<List<Device>>(emptyList())
     val discoveredDevices: StateFlow<List<Device>> = _discoveredDevices.asStateFlow()
+
+    private class PeerSession(
+        val deviceId: String,
+        val deviceName: String,
+        val socket: Socket,
+        val reader: BufferedReader,
+        val writer: PrintWriter
+    ) {
+        fun closeSilently() {
+            try { reader.close() } catch (_: Throwable) {}
+            try { writer.close() } catch (_: Throwable) {}
+            try { socket.close() } catch (_: Throwable) {}
+        }
+    }
+
+    private val activeSessions = java.util.concurrent.ConcurrentHashMap<String, PeerSession>()
 
     private val recentlyProcessedHashes = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
@@ -89,6 +108,9 @@ class LocalWifiTransport(
     }
 
     val localDeviceId: String by lazy {
+        if (!customDeviceId.isNullOrBlank()) {
+            return@lazy customDeviceId
+        }
         val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { "Android" }
         val cleanModel = if (rawModel.isNullOrBlank()) "Android" else rawModel.replace(" ", "_")
 
@@ -457,11 +479,228 @@ class LocalWifiTransport(
         val current = _discoveredDevices.value.toMutableList()
         val index = current.indexOfFirst { it.deviceId == device.deviceId || (it.ipAddress != null && it.ipAddress == device.ipAddress) }
         if (index >= 0) {
-            current[index] = device
+            val existing = current[index]
+            val preservedState = if (existing.connectionState == ConnectionState.CONNECTED || existing.connectionState == ConnectionState.CONNECTING) {
+                existing.connectionState
+            } else {
+                device.connectionState
+            }
+            current[index] = device.copy(connectionState = preservedState)
         } else {
             current.add(device)
         }
         _discoveredDevices.value = current
+    }
+
+    fun updateDeviceConnectionState(deviceId: String, state: ConnectionState) {
+        val current = _discoveredDevices.value.toMutableList()
+        val index = current.indexOfFirst { it.deviceId == deviceId }
+        if (index >= 0) {
+            val updated = current[index].copy(
+                connectionState = state,
+                isOnline = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING || state == ConnectionState.DISCOVERED
+            )
+            current[index] = updated
+            _discoveredDevices.value = current
+        }
+    }
+
+    private fun parseKeyFromMessage(message: String?, key: String): String? {
+        if (message.isNullOrBlank()) return null
+        try {
+            val regex = Regex("""(?i)\b$key\s*[:=]\s*([^;\,\}\s"]+)""")
+            val match = regex.find(message)
+            if (match != null) {
+                return match.groupValues[1].trim()
+            }
+            if (key == "deviceName") {
+                if (message.startsWith("ACK_FROM_")) {
+                    return message.removePrefix("ACK_FROM_").trim()
+                }
+                if (message.startsWith("HELLO_FROM_")) {
+                    return message.removePrefix("HELLO_FROM_").trim()
+                }
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to parse $key from message: $message", e)
+        }
+        return null
+    }
+
+    suspend fun connectToDevice(targetDevice: Device): Boolean {
+        val deviceId = targetDevice.deviceId
+        val currentDeviceState = _discoveredDevices.value.find { it.deviceId == deviceId }?.connectionState
+        if (currentDeviceState == ConnectionState.CONNECTED) {
+            Log.i(TAG, "Device $deviceId is already CONNECTED. Returning active session.")
+            return true
+        }
+        if (currentDeviceState == ConnectionState.CONNECTING) {
+            Log.i(TAG, "Device $deviceId is currently CONNECTING. Ignoring duplicate connection request.")
+            return false
+        }
+
+        updateDeviceConnectionState(deviceId, ConnectionState.CONNECTING)
+
+        return withContext(Dispatchers.IO) {
+            val rawIp = targetDevice.ipAddress
+            if (rawIp.isNullOrBlank()) {
+                Log.e(TAG, "Cannot connect to device $deviceId: IP address is missing")
+                updateDeviceConnectionState(deviceId, ConnectionState.ERROR)
+                return@withContext false
+            }
+
+            val targetIp = if (rawIp.contains(":")) rawIp.substringBefore(":") else rawIp
+            val targetPort = if (rawIp.contains(":")) rawIp.substringAfter(":").toIntOrNull() ?: port else port
+
+            var socket: Socket? = null
+            try {
+                socket = Socket(targetIp, targetPort)
+                socket.soTimeout = 0 // Keep connection open for persistent session
+                val writer = PrintWriter(socket.getOutputStream(), true)
+                val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
+
+                val helloMsg = "HELLO deviceId=$localDeviceId;deviceName=${localDeviceName.replace(" ", "_")}"
+                writer.println(helloMsg)
+                Log.d(TAG, "Sent identity handshake to $targetIp:$targetPort: $helloMsg")
+
+                val ackLine = withTimeoutOrNull(5000) {
+                    reader.readLine()
+                }
+
+                if (ackLine.isNullOrBlank()) {
+                    Log.e(TAG, "Handshake failed: No response ACK received from $targetIp:$targetPort")
+                    socket.close()
+                    updateDeviceConnectionState(deviceId, ConnectionState.ERROR)
+                    return@withContext false
+                }
+
+                Log.d(TAG, "Received identity ACK from $targetIp:$targetPort: $ackLine")
+
+                val remoteDeviceId = parseKeyFromMessage(ackLine, "deviceId")
+                val remoteDeviceName = parseKeyFromMessage(ackLine, "deviceName")
+
+                // Verification requirement: Remote deviceId must match targetDevice.deviceId
+                if (remoteDeviceId != null && remoteDeviceId != deviceId) {
+                    Log.e(TAG, "Identity mismatch! Expected deviceId '$deviceId', but peer returned '$remoteDeviceId'. Rejecting connection.")
+                    socket.close()
+                    updateDeviceConnectionState(deviceId, ConnectionState.ERROR)
+                    return@withContext false
+                }
+
+                Log.i(TAG, "Peer identity verified for device $deviceId ($remoteDeviceName). Session CONNECTED.")
+
+                val session = PeerSession(
+                    deviceId = deviceId,
+                    deviceName = remoteDeviceName ?: targetDevice.deviceName,
+                    socket = socket,
+                    reader = reader,
+                    writer = writer
+                )
+
+                activeSessions[deviceId]?.closeSilently()
+                activeSessions[deviceId] = session
+
+                updateDeviceConnectionState(deviceId, ConnectionState.CONNECTED)
+                startSessionMonitoring(session)
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Connection attempt failed to $deviceId at $targetIp:$targetPort", e)
+                try { socket?.close() } catch (_: Throwable) {}
+                updateDeviceConnectionState(deviceId, ConnectionState.ERROR)
+                false
+            }
+        }
+    }
+
+    suspend fun disconnectFromDevice(deviceId: String) {
+        withContext(Dispatchers.IO) {
+            val session = activeSessions.remove(deviceId)
+            if (session != null) {
+                try {
+                    session.writer.println("DISCONNECT")
+                    session.writer.flush()
+                } catch (_: Throwable) {}
+                session.closeSilently()
+                Log.i(TAG, "Explicitly disconnected from device $deviceId")
+            }
+            updateDeviceConnectionState(deviceId, ConnectionState.DISCONNECTED)
+        }
+    }
+
+    private suspend fun processIncomingClipboardItem(item: ClipboardItem, writer: PrintWriter? = null): Boolean {
+        // 1. Validate SHA-256 Hash
+        val computedHash = ClipboardCoreManager.computeSha256(item.content)
+        if (computedHash != item.hash) {
+            Log.e(TAG, "SHA-256 hash validation failed for item [${item.id}]. Expected: ${item.hash}, Computed: $computedHash")
+            writer?.println("ERROR_HASH_MISMATCH")
+            return false
+        }
+
+        // 2. Self Device & Echo Loop Prevention
+        if (item.sourceDeviceId == localDeviceId) {
+            Log.w(TAG, "Ignoring echo item from self device ID: ${item.sourceDeviceId}")
+            writer?.println("ACK_ECHO_SKIPPED")
+            return false
+        }
+
+        val isDuplicate = synchronized(recentlyProcessedHashes) {
+            if (recentlyProcessedHashes.contains(item.hash)) {
+                true
+            } else {
+                recentlyProcessedHashes.add(item.hash)
+                if (recentlyProcessedHashes.size > 500) {
+                    val iterator = recentlyProcessedHashes.iterator()
+                    if (iterator.hasNext()) {
+                        iterator.next()
+                        iterator.remove()
+                    }
+                }
+                false
+            }
+        }
+
+        if (isDuplicate) {
+            Log.w(TAG, "Ignoring duplicate item with hash prefix: ${item.hash.take(8)}")
+            writer?.println("ACK_DUPLICATE_SKIPPED")
+            return false
+        }
+
+        // 3. Accepted
+        writer?.println("ACK_OK")
+        _incomingItems.emit(item)
+        _incomingMessages.emit("Received ClipboardItem [ID: ${item.id}, Source: ${item.sourceDeviceName}, ContentLength: ${item.content.length}]")
+        Log.i(TAG, "Successfully received and validated remote ClipboardItem [ID: ${item.id}, HashPrefix: ${item.hash.take(8)}]")
+        return true
+    }
+
+    private fun startSessionMonitoring(session: PeerSession) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                while (isActive) {
+                    val line = session.reader.readLine() ?: break
+                    val trimmed = line.trim()
+                    if (trimmed == "DISCONNECT" || trimmed == "BYE") {
+                        Log.i(TAG, "Peer ${session.deviceId} sent explicit disconnect signal.")
+                        break
+                    }
+                    if (trimmed.startsWith("{")) {
+                        val item = parseClipboardItemFromJson(trimmed)
+                        if (item != null) {
+                            processIncomingClipboardItem(item, session.writer)
+                            continue
+                        }
+                    }
+                    _incomingMessages.emit("Session [${session.deviceId}]: $trimmed")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Session read loop ended for ${session.deviceId}: ${e.message}")
+            } finally {
+                Log.i(TAG, "Peer session ended for device ${session.deviceId}")
+                session.closeSilently()
+                activeSessions.remove(session.deviceId, session)
+                updateDeviceConnectionState(session.deviceId, ConnectionState.DISCONNECTED)
+            }
+        }
     }
 
     private fun removeDiscoveredDeviceByServiceName(serviceName: String) {
@@ -476,6 +715,7 @@ class LocalWifiTransport(
 
     private suspend fun handleIncomingSocket(socket: Socket) {
         withContext(Dispatchers.IO) {
+            var isPersistentSession = false
             try {
                 socket.soTimeout = 5000
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
@@ -487,48 +727,7 @@ class LocalWifiTransport(
                     if (trimmed.startsWith("{")) {
                         val item = parseClipboardItemFromJson(trimmed)
                         if (item != null) {
-                            // 1. Validate SHA-256 Hash
-                            val computedHash = ClipboardCoreManager.computeSha256(item.content)
-                            if (computedHash != item.hash) {
-                                Log.e(TAG, "SHA-256 hash validation failed for item [${item.id}]. Expected: ${item.hash}, Computed: $computedHash")
-                                writer.println("ERROR_HASH_MISMATCH")
-                                return@withContext
-                            }
-
-                            // 2. Self Device & Echo Loop Prevention
-                            if (item.sourceDeviceId == localDeviceId) {
-                                Log.w(TAG, "Ignoring echo item from self device ID: ${item.sourceDeviceId}")
-                                writer.println("ACK_ECHO_SKIPPED")
-                                return@withContext
-                            }
-
-                            val isDuplicate = synchronized(recentlyProcessedHashes) {
-                                if (recentlyProcessedHashes.contains(item.hash)) {
-                                    true
-                                } else {
-                                    recentlyProcessedHashes.add(item.hash)
-                                    if (recentlyProcessedHashes.size > 500) {
-                                        val iterator = recentlyProcessedHashes.iterator()
-                                        if (iterator.hasNext()) {
-                                            iterator.next()
-                                            iterator.remove()
-                                        }
-                                    }
-                                    false
-                                }
-                            }
-
-                            if (isDuplicate) {
-                                Log.w(TAG, "Ignoring duplicate item with hash prefix: ${item.hash.take(8)}")
-                                writer.println("ACK_DUPLICATE_SKIPPED")
-                                return@withContext
-                            }
-
-                            // 3. Accepted
-                            writer.println("ACK_OK")
-                            _incomingItems.emit(item)
-                            _incomingMessages.emit("Received ClipboardItem [ID: ${item.id}, Source: ${item.sourceDeviceName}, ContentLength: ${item.content.length}]")
-                            Log.i(TAG, "Successfully received and validated remote ClipboardItem [ID: ${item.id}, HashPrefix: ${item.hash.take(8)}]")
+                            processIncomingClipboardItem(item, writer)
                             return@withContext
                         }
                     }
@@ -537,23 +736,58 @@ class LocalWifiTransport(
                     Log.d(TAG, "Received message: $message from ${socket.remoteSocketAddress}")
                     _incomingMessages.emit(message)
 
-                    val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { null }
-                    val deviceName = if (rawModel.isNullOrBlank()) "DEVICE" else rawModel.replace(" ", "_")
-                    val response = if (message.startsWith("HELLO_")) {
-                        "ACK_FROM_$deviceName"
+                    val peerDeviceId = parseKeyFromMessage(trimmed, "deviceId")
+                    val peerDeviceName = parseKeyFromMessage(trimmed, "deviceName") ?: "Remote Device"
+
+                    val response = if (trimmed.contains("deviceId=")) {
+                        "ACK deviceId=$localDeviceId;deviceName=${localDeviceName.replace(" ", "_")}"
+                    } else if (trimmed.startsWith("HELLO_")) {
+                        val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { null }
+                        val devName = if (rawModel.isNullOrBlank()) "DEVICE" else rawModel.replace(" ", "_")
+                        "ACK_FROM_$devName"
                     } else {
                         "ACK_OK"
                     }
                     writer.println(response)
                     Log.d(TAG, "Sent handshake ACK: $response")
+
+                    if (trimmed.startsWith("HELLO") && !peerDeviceId.isNullOrBlank() && peerDeviceId != localDeviceId) {
+                        isPersistentSession = true
+                        socket.soTimeout = 0
+
+                        val peerDevice = Device(
+                            deviceId = peerDeviceId,
+                            deviceName = peerDeviceName,
+                            ipAddress = socket.inetAddress?.hostAddress ?: "127.0.0.1",
+                            isLocalDevice = false,
+                            isOnline = true,
+                            connectionState = ConnectionState.CONNECTED
+                        )
+                        addDiscoveredDevice(peerDevice)
+                        updateDeviceConnectionState(peerDeviceId, ConnectionState.CONNECTED)
+
+                        val session = PeerSession(
+                            deviceId = peerDeviceId,
+                            deviceName = peerDeviceName,
+                            socket = socket,
+                            reader = reader,
+                            writer = writer
+                        )
+                        activeSessions[peerDeviceId]?.closeSilently()
+                        activeSessions[peerDeviceId] = session
+
+                        startSessionMonitoring(session)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error handling incoming socket connection", e)
             } finally {
-                try {
-                    socket.close()
-                } catch (e: Exception) {
-                    // Ignore close error
+                if (!isPersistentSession) {
+                    try {
+                        socket.close()
+                    } catch (e: Exception) {
+                        // Ignore close error
+                    }
                 }
             }
         }
@@ -595,7 +829,35 @@ class LocalWifiTransport(
         return withContext(Dispatchers.IO) {
             val jsonPayload = item.toJsonString()
 
-            // Resolve target devices and target ports
+            // 1. Try sending over active persistent PeerSessions first
+            var sentViaSession = false
+            if (activeSessions.isNotEmpty()) {
+                val sessionTargets = if (targetDeviceId.isNotBlank() && targetDeviceId != "ALL" && !targetDeviceId.contains(".")) {
+                    activeSessions.filterKeys { it == targetDeviceId }.values
+                } else {
+                    activeSessions.values
+                }
+
+                for (session in sessionTargets) {
+                    try {
+                        session.writer.println(jsonPayload)
+                        session.writer.flush()
+                        Log.i(TAG, "Sent ClipboardItem ${item.id} via active PeerSession to ${session.deviceId}")
+                        sentViaSession = true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to send ClipboardItem ${item.id} via PeerSession to ${session.deviceId}", e)
+                        session.closeSilently()
+                        activeSessions.remove(session.deviceId, session)
+                        updateDeviceConnectionState(session.deviceId, ConnectionState.DISCONNECTED)
+                    }
+                }
+            }
+
+            if (sentViaSession) {
+                return@withContext true
+            }
+
+            // 2. Fallback to direct TCP socket connections (for target IP strings or discovered devices without an active session)
             val targets = if (targetDeviceId.isNotBlank() && targetDeviceId.contains(".")) {
                 listOf(Device(deviceId = "target_ip", deviceName = "Target IP Device", ipAddress = targetDeviceId))
             } else if (targetDeviceId.isNotBlank() && targetDeviceId != "ALL") {
