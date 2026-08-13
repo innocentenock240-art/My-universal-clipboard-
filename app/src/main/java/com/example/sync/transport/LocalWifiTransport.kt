@@ -14,6 +14,7 @@ import com.example.sync.model.toJsonString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +52,7 @@ class LocalWifiTransport(
         private const val TAG = "LocalWifiTransport"
         private const val PREFS_NAME = "uclip_device_prefs"
         private const val KEY_DEVICE_ID = "local_device_id"
+        private const val KEY_KNOWN_PEERS = "known_peer_device_ids"
     }
 
     override val transportName: String = "LocalWi-Fi"
@@ -66,6 +68,72 @@ class LocalWifiTransport(
 
     private val _discoveredDevices = MutableStateFlow<List<Device>>(emptyList())
     val discoveredDevices: StateFlow<List<Device>> = _discoveredDevices.asStateFlow()
+
+    private val knownPeerDeviceIds = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val reconnectingJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+
+    init {
+        loadKnownPeersFromPrefs()
+    }
+
+    private fun loadKnownPeersFromPrefs() {
+        context?.let { ctx ->
+            try {
+                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val stored = prefs.getStringSet(KEY_KNOWN_PEERS, null)
+                if (stored != null) {
+                    knownPeerDeviceIds.addAll(stored)
+                    Log.i(TAG, "Loaded ${stored.size} known peer(s) from persistent storage: $stored")
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Failed to load known peers from SharedPreferences", e)
+            }
+        }
+    }
+
+    private fun saveKnownPeersToPrefs() {
+        context?.let { ctx ->
+            try {
+                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                synchronized(knownPeerDeviceIds) {
+                    prefs.edit().putStringSet(KEY_KNOWN_PEERS, HashSet(knownPeerDeviceIds)).apply()
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Failed to save known peers to SharedPreferences", e)
+            }
+        }
+    }
+
+    fun addKnownPeer(deviceId: String) {
+        if (deviceId.isBlank() || deviceId == localDeviceId) return
+        val added = knownPeerDeviceIds.add(deviceId)
+        if (added) {
+            saveKnownPeersToPrefs()
+            Log.i(TAG, "Added known peer: $deviceId. Total known peers: ${knownPeerDeviceIds.size}")
+        }
+    }
+
+    fun removeKnownPeer(deviceId: String) {
+        val removed = knownPeerDeviceIds.remove(deviceId)
+        if (removed) {
+            saveKnownPeersToPrefs()
+            Log.i(TAG, "Removed known peer: $deviceId")
+        }
+    }
+
+    fun isKnownPeer(deviceId: String): Boolean {
+        return knownPeerDeviceIds.contains(deviceId)
+    }
+
+    fun getKnownPeers(): Set<String> {
+        return synchronized(knownPeerDeviceIds) { knownPeerDeviceIds.toSet() }
+    }
+
+    fun clearKnownPeers() {
+        knownPeerDeviceIds.clear()
+        saveKnownPeersToPrefs()
+        Log.i(TAG, "Cleared all known peers from storage")
+    }
 
     private class PeerSession(
         val deviceId: String,
@@ -187,6 +255,8 @@ class LocalWifiTransport(
         _isListening = false
         listeningJob?.cancel()
         listeningJob = null
+        reconnectingJobs.values.forEach { it.cancel() }
+        reconnectingJobs.clear()
         stopNsdAdvertisement()
         stopNsdDiscovery()
         try {
@@ -476,20 +546,117 @@ class LocalWifiTransport(
 
     fun addDiscoveredDevice(device: Device) {
         if (device.deviceId == localDeviceId) return
+        val isKnown = isKnownPeer(device.deviceId)
         val current = _discoveredDevices.value.toMutableList()
         val index = current.indexOfFirst { it.deviceId == device.deviceId || (it.ipAddress != null && it.ipAddress == device.ipAddress) }
+        val updatedDevice: Device
+
         if (index >= 0) {
             val existing = current[index]
-            val preservedState = if (existing.connectionState == ConnectionState.CONNECTED || existing.connectionState == ConnectionState.CONNECTING) {
+            val preservedState = if (existing.connectionState == ConnectionState.CONNECTED || existing.connectionState == ConnectionState.CONNECTING || existing.connectionState == ConnectionState.RECONNECTING) {
                 existing.connectionState
+            } else if (isKnown && (existing.connectionState == ConnectionState.DISCONNECTED || existing.connectionState == ConnectionState.DISCOVERED)) {
+                ConnectionState.RECONNECTING
             } else {
                 device.connectionState
             }
-            current[index] = device.copy(connectionState = preservedState)
+            updatedDevice = device.copy(
+                isPaired = isKnown || existing.isPaired,
+                connectionState = preservedState
+            )
+            current[index] = updatedDevice
         } else {
-            current.add(device)
+            val initialState = if (isKnown && device.connectionState == ConnectionState.DISCOVERED) {
+                ConnectionState.RECONNECTING
+            } else {
+                device.connectionState
+            }
+            updatedDevice = device.copy(
+                isPaired = isKnown,
+                connectionState = initialState
+            )
+            current.add(updatedDevice)
         }
         _discoveredDevices.value = current
+
+        // Automatic Reconnection Trigger for Known Peers
+        if (isKnown) {
+            triggerAutoReconnectIfEligible(updatedDevice)
+        }
+    }
+
+    fun triggerAutoReconnectIfEligible(targetDevice: Device) {
+        val deviceId = targetDevice.deviceId
+        if (!isKnownPeer(deviceId) || deviceId == localDeviceId) return
+        if (activeSessions.containsKey(deviceId)) {
+            Log.d(TAG, "Device $deviceId already has an active session. No auto-reconnect needed.")
+            return
+        }
+
+        val currentStatus = _discoveredDevices.value.find { it.deviceId == deviceId }?.connectionState
+        if (currentStatus == ConnectionState.CONNECTED) {
+            return
+        }
+
+        val existingJob = reconnectingJobs[deviceId]
+        if (existingJob != null && existingJob.isActive) {
+            Log.d(TAG, "Auto-reconnect already active for $deviceId. Skipping duplicate trigger.")
+            return
+        }
+
+        val job = scope.launch(Dispatchers.IO) {
+            try {
+                var attempt = 0
+                val maxAttempts = 3
+                val backoffs = listOf(100L, 1000L, 2500L)
+
+                while (isActive && attempt < maxAttempts) {
+                    if (activeSessions.containsKey(deviceId)) {
+                        Log.i(TAG, "Device $deviceId is connected. Terminating auto-reconnect loop.")
+                        break
+                    }
+
+                    // Retrieve newest device entry from state flow to ensure latest IP from NSD is used
+                    val latestDevice = _discoveredDevices.value.find { it.deviceId == deviceId } ?: targetDevice
+                    if (latestDevice.ipAddress.isNullOrBlank()) {
+                        Log.w(TAG, "Cannot auto-reconnect to $deviceId: Missing IP address.")
+                        break
+                    }
+
+                    attempt++
+                    Log.i(TAG, "Auto-reconnecting to known peer $deviceId at ${latestDevice.ipAddress} (Attempt $attempt/$maxAttempts)...")
+                    updateDeviceConnectionState(deviceId, ConnectionState.RECONNECTING)
+
+                    val success = connectToDevice(latestDevice)
+                    if (success) {
+                        Log.i(TAG, "Auto-reconnection succeeded for known peer $deviceId.")
+                        break
+                    } else {
+                        Log.w(TAG, "Auto-reconnection attempt $attempt failed for $deviceId.")
+                        if (attempt < maxAttempts) {
+                            val delayMs = backoffs.getOrElse(attempt) { 2000L }
+                            delay(delayMs)
+                        }
+                    }
+                }
+
+                if (!activeSessions.containsKey(deviceId)) {
+                    val finalState = _discoveredDevices.value.find { it.deviceId == deviceId }?.connectionState
+                    if (finalState != ConnectionState.CONNECTED) {
+                        updateDeviceConnectionState(deviceId, ConnectionState.DISCONNECTED)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception during auto-reconnection for $deviceId", e)
+                if (!activeSessions.containsKey(deviceId)) {
+                    updateDeviceConnectionState(deviceId, ConnectionState.DISCONNECTED)
+                }
+            } finally {
+                reconnectingJobs.remove(deviceId)
+            }
+        }
+
+        reconnectingJobs[deviceId] = job
     }
 
     fun updateDeviceConnectionState(deviceId: String, state: ConnectionState) {
@@ -498,7 +665,7 @@ class LocalWifiTransport(
         if (index >= 0) {
             val updated = current[index].copy(
                 connectionState = state,
-                isOnline = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING || state == ConnectionState.DISCOVERED
+                isOnline = state == ConnectionState.CONNECTED || state == ConnectionState.CONNECTING || state == ConnectionState.RECONNECTING || state == ConnectionState.DISCOVERED
             )
             current[index] = updated
             _discoveredDevices.value = current
@@ -530,8 +697,8 @@ class LocalWifiTransport(
     suspend fun connectToDevice(targetDevice: Device): Boolean {
         val deviceId = targetDevice.deviceId
         val currentDeviceState = _discoveredDevices.value.find { it.deviceId == deviceId }?.connectionState
-        if (currentDeviceState == ConnectionState.CONNECTED) {
-            Log.i(TAG, "Device $deviceId is already CONNECTED. Returning active session.")
+        if (currentDeviceState == ConnectionState.CONNECTED && activeSessions.containsKey(deviceId)) {
+            Log.i(TAG, "Device $deviceId is already CONNECTED with active session.")
             return true
         }
         if (currentDeviceState == ConnectionState.CONNECTING) {
@@ -589,6 +756,10 @@ class LocalWifiTransport(
 
                 Log.i(TAG, "Peer identity verified for device $deviceId ($remoteDeviceName). Session CONNECTED.")
 
+                // Remember this peer for future automatic reconnection
+                addKnownPeer(deviceId)
+                reconnectingJobs.remove(deviceId)?.cancel()
+
                 val session = PeerSession(
                     deviceId = deviceId,
                     deviceName = remoteDeviceName ?: targetDevice.deviceName,
@@ -614,6 +785,7 @@ class LocalWifiTransport(
 
     suspend fun disconnectFromDevice(deviceId: String) {
         withContext(Dispatchers.IO) {
+            reconnectingJobs.remove(deviceId)?.cancel()
             val session = activeSessions.remove(deviceId)
             if (session != null) {
                 try {
@@ -705,7 +877,11 @@ class LocalWifiTransport(
 
     private fun removeDiscoveredDeviceByServiceName(serviceName: String) {
         val current = _discoveredDevices.value.toMutableList()
-        current.removeAll { serviceName.contains(it.deviceId) }
+        current.removeAll { 
+            serviceName.contains(it.deviceId) && 
+            it.connectionState != ConnectionState.CONNECTED && 
+            !activeSessions.containsKey(it.deviceId) 
+        }
         _discoveredDevices.value = current
     }
 
@@ -755,12 +931,17 @@ class LocalWifiTransport(
                         isPersistentSession = true
                         socket.soTimeout = 0
 
+                        // Remember this peer for future automatic reconnection
+                        addKnownPeer(peerDeviceId)
+                        reconnectingJobs.remove(peerDeviceId)?.cancel()
+
                         val peerDevice = Device(
                             deviceId = peerDeviceId,
                             deviceName = peerDeviceName,
                             ipAddress = socket.inetAddress?.hostAddress ?: "127.0.0.1",
                             isLocalDevice = false,
                             isOnline = true,
+                            isPaired = true,
                             connectionState = ConnectionState.CONNECTED
                         )
                         addDiscoveredDevice(peerDevice)

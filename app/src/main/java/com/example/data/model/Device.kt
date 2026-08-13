@@ -3,6 +3,7 @@ package com.example.data.model
 enum class ConnectionState {
     DISCOVERED,
     CONNECTING,
+    RECONNECTING,
     CONNECTED,
     DISCONNECTED,
     ERROR

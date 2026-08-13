@@ -214,6 +214,7 @@ fun DiscoveredDeviceCard(
     val statusText = when (device.connectionState) {
         ConnectionState.CONNECTED -> "CONNECTED"
         ConnectionState.CONNECTING -> "CONNECTING..."
+        ConnectionState.RECONNECTING -> "RECONNECTING..."
         ConnectionState.ERROR -> "ERROR"
         ConnectionState.DISCONNECTED -> "DISCONNECTED"
         ConnectionState.DISCOVERED -> "AVAILABLE"
@@ -221,14 +222,14 @@ fun DiscoveredDeviceCard(
 
     val statusBgColor = when (device.connectionState) {
         ConnectionState.CONNECTED -> Color(0xFF2E7D32)
-        ConnectionState.CONNECTING -> Color(0xFFE65100)
+        ConnectionState.CONNECTING, ConnectionState.RECONNECTING -> Color(0xFFE65100)
         ConnectionState.ERROR -> Color(0xFFC62828)
         ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.surfaceVariant
         ConnectionState.DISCOVERED -> MaterialTheme.colorScheme.primaryContainer
     }
 
     val statusTextColor = when (device.connectionState) {
-        ConnectionState.CONNECTED, ConnectionState.CONNECTING, ConnectionState.ERROR -> Color.White
+        ConnectionState.CONNECTED, ConnectionState.CONNECTING, ConnectionState.RECONNECTING, ConnectionState.ERROR -> Color.White
         ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
         ConnectionState.DISCOVERED -> MaterialTheme.colorScheme.onPrimaryContainer
     }
@@ -260,11 +261,27 @@ fun DiscoveredDeviceCard(
                 )
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = device.deviceName,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = device.deviceName,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        if (device.isPaired) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "KNOWN PEER",
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = "Device ID: ${device.deviceId}",
                         fontSize = 12.sp,
@@ -313,20 +330,21 @@ fun DiscoveredDeviceCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Transport:",
+                    text = "Sync Status:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "Local Wi-Fi",
+                    text = if (device.connectionState == ConnectionState.CONNECTED) "Sync: Active" else if (device.connectionState == ConnectionState.RECONNECTING) "Reconnecting..." else "Inactive",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (device.connectionState == ConnectionState.CONNECTED) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
             Spacer(Modifier.height(4.dp))
 
-            // Milestone 5.3 Connection Control Button
+            // Milestone 5.3 & 5.5 Connection Control Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
@@ -343,7 +361,7 @@ fun DiscoveredDeviceCard(
                             Text("DISCONNECT", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                    ConnectionState.CONNECTING -> {
+                    ConnectionState.CONNECTING, ConnectionState.RECONNECTING -> {
                         Button(
                             onClick = {},
                             enabled = false,
@@ -356,7 +374,11 @@ fun DiscoveredDeviceCard(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text("CONNECTING...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (device.connectionState == ConnectionState.RECONNECTING) "RECONNECTING..." else "CONNECTING...",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                     else -> {
