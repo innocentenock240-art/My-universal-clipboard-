@@ -104,7 +104,13 @@ fun MainNavGraph(
                             viewModel.addClipboardItem(text)
                             onCopyText(text)
                         },
+                        onAddRichItem = { type, content, mimeType, fileName, sizeBytes ->
+                            viewModel.addRichClipboardItem(type, content, mimeType, fileName, sizeBytes)
+                        },
                         onCopyItem = onCopyText,
+                        onCopyClipboardItem = { item ->
+                            viewModel.copyClipboardItem(item)
+                        },
                         onToggleFavorite = viewModel::toggleFavorite,
                         onTogglePin = viewModel::togglePin,
                         onDeleteItem = viewModel::deleteItem,

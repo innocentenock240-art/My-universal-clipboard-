@@ -1,8 +1,14 @@
 package com.example.ui.screens
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -11,7 +17,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -24,7 +34,9 @@ fun ClipboardScreen(
     items: List<ClipboardItem>,
     isCaptureActive: Boolean = true,
     onAddItem: (String) -> Unit,
+    onAddRichItem: (type: String, content: String, mimeType: String, fileName: String?, sizeBytes: Long) -> Unit = { _, _, _, _, _ -> },
     onCopyItem: (String) -> Unit,
+    onCopyClipboardItem: (ClipboardItem) -> Unit = { onCopyItem(it.content) },
     onToggleFavorite: (String) -> Unit,
     onTogglePin: (String) -> Unit,
     onDeleteItem: (String) -> Unit,
@@ -45,7 +57,9 @@ fun ClipboardScreen(
     val filteredItems = remember(items, searchQuery, selectedFilterTab) {
         items.filter { item ->
             val matchesSearch = item.content.contains(searchQuery, ignoreCase = true) ||
-                    item.sourceDeviceName.contains(searchQuery, ignoreCase = true)
+                    item.sourceDeviceName.contains(searchQuery, ignoreCase = true) ||
+                    (item.fileName?.contains(searchQuery, ignoreCase = true) == true) ||
+                    item.type.contains(searchQuery, ignoreCase = true)
             val matchesTab = when (selectedFilterTab) {
                 1 -> item.isFavorite
                 2 -> item.isPinned
@@ -119,41 +133,41 @@ fun ClipboardScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Security,
-                                contentDescription = null,
-                                tint = if (isCaptureActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                text = if (isCaptureActive) "Clipboard capture: Active (Foreground)" else "Clipboard capture: Stopped",
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        Switch(
-                            checked = isCaptureActive,
-                            onCheckedChange = { onToggleCapture() },
-                            modifier = Modifier.testTag("toggle_capture_switch")
+                        Icon(
+                            imageVector = Icons.Outlined.Security,
+                            contentDescription = null,
+                            tint = if (isCaptureActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = if (isCaptureActive) "Clipboard capture: Active (Foreground)" else "Clipboard capture: Stopped",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                    Text(
-                        text = "Clipboard history is stored locally on this device. Clipboard synchronization will only be added for devices you authorize.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Switch(
+                        checked = isCaptureActive,
+                        onCheckedChange = { onToggleCapture() },
+                        modifier = Modifier.testTag("toggle_capture_switch")
                     )
                 }
+                Text(
+                    text = "Rich content support active: Plain text, Unicode, URLs, Code, HTML, Images, and Files with SHA-256 integrity.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
+        }
 
             // Search Bar
             OutlinedTextField(
@@ -162,7 +176,7 @@ fun ClipboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("search_clipboard_input"),
-                placeholder = { Text("Search clipboard history...") },
+                placeholder = { Text("Search text, URLs, code, files...") },
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Default.Search,
@@ -223,7 +237,7 @@ fun ClipboardScreen(
                     items(filteredItems, key = { it.id }) { item ->
                         ClipboardItemCard(
                             item = item,
-                            onCopy = { onCopyItem(item.content) },
+                            onCopy = { onCopyClipboardItem(item) },
                             onToggleFavorite = { onToggleFavorite(item.id) },
                             onTogglePin = { onTogglePin(item.id) },
                             onDelete = { onDeleteItem(item.id) }
@@ -236,10 +250,14 @@ fun ClipboardScreen(
     }
 
     if (showAddDialog) {
-        AddClipboardItemDialog(
+        AddRichClipboardItemDialog(
             onDismiss = { showAddDialog = false },
-            onConfirm = { text ->
+            onConfirmText = { text ->
                 onAddItem(text)
+                showAddDialog = false
+            },
+            onConfirmRich = { type, content, mimeType, fileName, sizeBytes ->
+                onAddRichItem(type, content, mimeType, fileName, sizeBytes)
                 showAddDialog = false
             }
         )
@@ -292,6 +310,7 @@ fun ClipboardItemCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Header Row: Type Badge + Device Name + Favorite/Pin
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -299,18 +318,31 @@ fun ClipboardItemCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = when (item.type) {
-                            "URL" -> Icons.Default.Link
-                            "CODE" -> Icons.Default.Code
-                            else -> Icons.Default.TextFields
+                    SuggestionChip(
+                        onClick = {},
+                        label = { Text(item.type, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                        icon = {
+                            Icon(
+                                imageVector = when (item.type) {
+                                    ClipboardItem.TYPE_URL -> Icons.Default.Link
+                                    ClipboardItem.TYPE_CODE -> Icons.Default.Code
+                                    ClipboardItem.TYPE_HTML -> Icons.Default.Html
+                                    ClipboardItem.TYPE_IMAGE -> Icons.Default.Image
+                                    ClipboardItem.TYPE_FILE -> Icons.Default.AttachFile
+                                    else -> Icons.Default.TextFields
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
                         },
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        colors = SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
+
                     Text(
                         text = item.sourceDeviceName,
                         style = MaterialTheme.typography.labelSmall,
@@ -336,21 +368,111 @@ fun ClipboardItemCard(
                 }
             }
 
-            Text(
-                text = item.content,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis
-            )
+            // Content Body Based on Type
+            when (item.type) {
+                ClipboardItem.TYPE_IMAGE -> {
+                    val bitmap = remember(item.content) {
+                        try {
+                            val decodedBytes = Base64.decode(item.content, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
 
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = item.fileName ?: "Clipboard Image",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                    if (item.fileName != null) {
+                        Text(
+                            text = item.fileName,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                ClipboardItem.TYPE_FILE -> {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.InsertDriveFile,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = item.fileName ?: "Attached File",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "${item.mimeType} • ${item.displaySize}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                ClipboardItem.TYPE_CODE -> {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = item.content,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(10.dp),
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                else -> {
+                    Text(
+                        text = item.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // Footer Row: Metadata & Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "7-day retention active",
+                    text = "${item.displaySize} • SHA-256: ${item.hash.take(8)}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -383,33 +505,108 @@ fun ClipboardItemCard(
 }
 
 @Composable
-fun AddClipboardItemDialog(
+fun AddRichClipboardItemDialog(
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
+    onConfirmText: (String) -> Unit,
+    onConfirmRich: (type: String, content: String, mimeType: String, fileName: String?, sizeBytes: Long) -> Unit
 ) {
+    var selectedTypeIndex by remember { mutableStateOf(0) } // 0: Text, 1: URL, 2: Code, 3: HTML, 4: Image, 5: File
     var textInput by remember { mutableStateOf("") }
+    var fileNameInput by remember { mutableStateOf("") }
+
+    val typeOptions = listOf("Text", "URL", "Code", "HTML", "Image", "File")
+
+    // Prepopulate sensible template when switching tabs
+    LaunchedEffect(selectedTypeIndex) {
+        when (selectedTypeIndex) {
+            0 -> if (textInput.isBlank()) textInput = "Hello Universal Clipboard! 🚀"
+            1 -> if (textInput.isBlank()) textInput = "https://example.com/api?user=alpha#dashboard"
+            2 -> if (textInput.isBlank()) textInput = "fun synchronizeClipboard(item: ClipboardItem) {\n    syncEngine.broadcast(item)\n}"
+            3 -> if (textInput.isBlank()) textInput = "<div style=\"color: #0066cc;\"><h1>Universal Clipboard</h1><p>Rich HTML content</p></div>"
+            4 -> {
+                fileNameInput = "sample_badge.png"
+                // 1x1 transparent PNG Base64 for instant testing
+                textInput = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkWPjfDwAEeQHzE1LqtwAAAABJRU5ErkJggg=="
+            }
+            5 -> {
+                fileNameInput = "document.pdf"
+                textInput = "JVBERi0xLjQKJeLjz9MKMSAwIG9iaiA8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PmVuZG9iagoyIDAgb2JqIDw8L1R5cGUvUGFnZXMvS2lkc1szIDAgUl0vQ291bnQgMT4+ZW5kb2JqCjMgMCBvYmo8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSL01lZGlhQm94WzAgMCA2MTIgNzkyXT4+ZW5kb2JqCnhyZWYKMCA0Cg=="
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Clipboard Item") },
+        title = { Text("Add Rich Clipboard Item") },
         text = {
-            OutlinedTextField(
-                value = textInput,
-                onValueChange = { textInput = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp),
-                placeholder = { Text("Enter text, code, or URL to copy...") }
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Type selector chips
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    typeOptions.forEachIndexed { index, title ->
+                        FilterChip(
+                            selected = selectedTypeIndex == index,
+                            onClick = {
+                                selectedTypeIndex = index
+                                textInput = ""
+                            },
+                            label = { Text(title, fontSize = 12.sp) }
+                        )
+                    }
+                }
+
+                if (selectedTypeIndex == 4 || selectedTypeIndex == 5) {
+                    OutlinedTextField(
+                        value = fileNameInput,
+                        onValueChange = { fileNameInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("File Name") },
+                        singleLine = true
+                    )
+                }
+
+                OutlinedTextField(
+                    value = textInput,
+                    onValueChange = { textInput = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(130.dp),
+                    label = {
+                        Text(
+                            when (selectedTypeIndex) {
+                                1 -> "URL Link"
+                                2 -> "Source Code Snippet"
+                                3 -> "HTML Content"
+                                4 -> "Image Payload (Base64)"
+                                5 -> "File Payload (Base64/Text)"
+                                else -> "Text or Unicode Content"
+                            }
+                        )
+                    }
+                )
+            }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    onConfirm(textInput)
+                    when (selectedTypeIndex) {
+                        0, 1 -> onConfirmText(textInput)
+                        2 -> onConfirmRich(ClipboardItem.TYPE_CODE, textInput, ClipboardItem.MIME_TEXT_PLAIN, null, textInput.toByteArray(Charsets.UTF_8).size.toLong())
+                        3 -> onConfirmRich(ClipboardItem.TYPE_HTML, textInput, ClipboardItem.MIME_TEXT_HTML, null, textInput.toByteArray(Charsets.UTF_8).size.toLong())
+                        4 -> onConfirmRich(ClipboardItem.TYPE_IMAGE, textInput, ClipboardItem.MIME_IMAGE_PNG, fileNameInput.ifBlank { "image.png" }, textInput.toByteArray(Charsets.UTF_8).size.toLong())
+                        5 -> onConfirmRich(ClipboardItem.TYPE_FILE, textInput, ClipboardItem.MIME_OCTET_STREAM, fileNameInput.ifBlank { "file.dat" }, textInput.toByteArray(Charsets.UTF_8).size.toLong())
+                    }
                 },
                 enabled = textInput.isNotBlank()
             ) {
-                Text("Add & Copy")
+                Text("Add & Sync")
             }
         },
         dismissButton = {
@@ -419,3 +616,4 @@ fun AddClipboardItemDialog(
         }
     )
 }
+

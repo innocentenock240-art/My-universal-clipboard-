@@ -127,6 +127,20 @@ class MainViewModel @JvmOverloads constructor(
         clipboardCore.processClipboardText(text)
     }
 
+    fun addRichClipboardItem(
+        type: String,
+        content: String,
+        mimeType: String = ClipboardItem.MIME_TEXT_PLAIN,
+        fileName: String? = null,
+        sizeBytes: Long = 0L
+    ) {
+        clipboardCore.processRichClipboardItem(type, content, mimeType, fileName, sizeBytes)
+    }
+
+    fun copyClipboardItem(item: ClipboardItem) {
+        clipboardCore.applyRemoteClipboardItem(item)
+    }
+
     fun toggleFavorite(itemId: String) {
         val currentItem = clipboardItems.value.firstOrNull { it.id == itemId } ?: return
         viewModelScope.launch {

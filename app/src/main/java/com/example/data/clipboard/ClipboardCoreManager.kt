@@ -47,6 +47,18 @@ class ClipboardCoreManager(
         lastCapturedHash = hash
     }
 
+    private val _isCaptureActive = MutableStateFlow(false)
+    val isCaptureActive: StateFlow<Boolean> = _isCaptureActive.asStateFlow()
+
+    init {
+        captureSource.setOnClipCapturedListener { rawText ->
+            processClipboardText(rawText)
+        }
+        captureSource.setOnRichClipCapturedListener { type, content, mimeType, fileName, sizeBytes ->
+            processRichClipboardItem(type, content, mimeType, fileName, sizeBytes)
+        }
+    }
+
     /**
      * Apply a remote clipboard item to the local system clipboard while updating lastCapturedHash to prevent echo loops.
      */
@@ -54,15 +66,10 @@ class ClipboardCoreManager(
         if (item.content.isBlank()) return
         val itemHash = item.hash.ifBlank { computeSha256(item.content) }
         lastCapturedHash = itemHash
-        captureSource.setClipText(item.content)
-    }
-
-    private val _isCaptureActive = MutableStateFlow(false)
-    val isCaptureActive: StateFlow<Boolean> = _isCaptureActive.asStateFlow()
-
-    init {
-        captureSource.setOnClipCapturedListener { rawText ->
-            processClipboardText(rawText)
+        when (item.type) {
+            ClipboardItem.TYPE_HTML -> captureSource.setClipHtml(item.content)
+            ClipboardItem.TYPE_IMAGE, ClipboardItem.TYPE_FILE -> captureSource.setClipRich(item.type, item.content, item.mimeType, item.fileName)
+            else -> captureSource.setClipText(item.content)
         }
     }
 
@@ -90,7 +97,59 @@ class ClipboardCoreManager(
     }
 
     /**
+     * Process rich clipboard content (HTML, image Base64, binary file, code).
+     */
+    fun processRichClipboardItem(
+        type: String,
+        content: String,
+        mimeType: String = ClipboardItem.MIME_TEXT_PLAIN,
+        fileName: String? = null,
+        sizeBytes: Long = 0L
+    ): ClipboardItem? {
+        if (content.isBlank()) return null
+        val hash = computeSha256(content)
+
+        if (hash == lastCapturedHash) {
+            return null
+        }
+        lastCapturedHash = hash
+
+        val now = System.currentTimeMillis()
+        val actualSizeBytes = if (sizeBytes > 0) sizeBytes else content.toByteArray(Charsets.UTF_8).size.toLong()
+        val newItem = ClipboardItem(
+            id = "clip_${now}_${(1000..9999).random()}",
+            sourceDeviceId = deviceId,
+            sourceDeviceName = deviceName,
+            type = type,
+            content = content,
+            mimeType = mimeType,
+            fileName = fileName,
+            sizeBytes = actualSizeBytes,
+            createdAt = now,
+            expiresAt = ClipboardRepository.calculateExpirationTime(now, ClipboardRepository.DEFAULT_RETENTION_DAYS),
+            hash = hash
+        )
+
+        Log.i(
+            TAG,
+            "Clipboard Core created rich item [ID: ${newItem.id}, Type: ${newItem.type}, MIME: ${newItem.mimeType}, Size: ${newItem.displaySize}, HashPrefix: ${hash.take(8)}]"
+        )
+
+        coroutineScope.launch {
+            try {
+                repository.insertClipboardItem(newItem)
+                onItemProcessedListener?.invoke(newItem)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to persist captured rich clipboard item into repository", e)
+            }
+        }
+
+        return newItem
+    }
+
+    /**
      * Process raw clipboard text string through validation, hashing, duplicate detection, and persistence.
+     * Intelligently categorizes content as URL, CODE, HTML, or TEXT.
      * Returns the created [ClipboardItem] if accepted, or null if invalid/duplicate.
      */
     fun processClipboardText(rawText: String?): ClipboardItem? {
@@ -107,13 +166,17 @@ class ClipboardCoreManager(
 
         lastCapturedHash = hash
 
+        val detectedType = detectContentType(rawText)
         val now = System.currentTimeMillis()
+        val bytes = rawText.toByteArray(Charsets.UTF_8)
         val newItem = ClipboardItem(
             id = "clip_${now}_${(1000..9999).random()}",
             sourceDeviceId = deviceId,
             sourceDeviceName = deviceName,
-            type = if (rawText.startsWith("http://") || rawText.startsWith("https://")) "URL" else "TEXT",
+            type = detectedType,
             content = rawText,
+            mimeType = if (detectedType == ClipboardItem.TYPE_HTML) ClipboardItem.MIME_TEXT_HTML else ClipboardItem.MIME_TEXT_PLAIN,
+            sizeBytes = bytes.size.toLong(),
             createdAt = now,
             expiresAt = ClipboardRepository.calculateExpirationTime(now, ClipboardRepository.DEFAULT_RETENTION_DAYS),
             hash = hash
@@ -136,6 +199,39 @@ class ClipboardCoreManager(
         }
 
         return newItem
+    }
+
+    /**
+     * Determines whether text is a URL, code snippet, HTML, or plain text.
+     */
+    private fun detectContentType(text: String): String {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("http://", ignoreCase = true) || 
+            trimmed.startsWith("https://", ignoreCase = true) ||
+            (trimmed.startsWith("www.", ignoreCase = true) && trimmed.contains("."))) {
+            return ClipboardItem.TYPE_URL
+        }
+        if (trimmed.startsWith("<!DOCTYPE html", ignoreCase = true) ||
+            trimmed.startsWith("<html", ignoreCase = true) ||
+            (trimmed.startsWith("<div", ignoreCase = true) && trimmed.endsWith("</div>", ignoreCase = true))) {
+            return ClipboardItem.TYPE_HTML
+        }
+        if (isCodeSnippet(text)) {
+            return ClipboardItem.TYPE_CODE
+        }
+        return ClipboardItem.TYPE_TEXT
+    }
+
+    private fun isCodeSnippet(text: String): Boolean {
+        val codeKeywords = listOf(
+            "fun ", "val ", "var ", "class ", "interface ", "function ", "const ", "let ",
+            "def ", "import ", "public static void", "System.out.print", "console.log",
+            "<?php", "#!/bin/", "SELECT ", "CREATE TABLE", "{\n", "}\n", "=>", "===",
+            "package ", "struct ", "impl ", "fn "
+        )
+        return codeKeywords.any { text.contains(it) } || 
+               (text.contains("{") && text.contains("}") && text.lines().size > 2) ||
+               (text.trim().startsWith("{") && text.trim().endsWith("}") && text.contains("\":"))
     }
 
     companion object {

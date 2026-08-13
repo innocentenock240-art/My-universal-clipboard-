@@ -9,7 +9,7 @@ import com.example.data.database.entity.ClipboardItemEntity
 
 @Database(
     entities = [ClipboardItemEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class ClipboardDatabase : RoomDatabase() {
@@ -26,7 +26,7 @@ abstract class ClipboardDatabase : RoomDatabase() {
                     context.applicationContext,
                     ClipboardDatabase::class.java,
                     "universal_clipboard.db"
-                ).build()
+                ).fallbackToDestructiveMigration().build()
                 INSTANCE = instance
                 instance
             }

@@ -1,13 +1,19 @@
 package com.example.data.clipboard
 
+import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Base64
 import android.util.Log
+import com.example.data.model.ClipboardItem
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 /**
  * Android implementation of [ClipboardCaptureSource].
- * Responsible ONLY for interacting with Android's [ClipboardManager].
- * Does NOT directly access Room, database, or repository layer.
+ * Responsible for interacting with Android's [ClipboardManager] and [ClipData].
+ * Handles plain text, HTML formatted text, images (URI/bitmap Base64 encoded), and binary items.
  */
 class AndroidClipboardCaptureSource(
     private val context: Context
@@ -26,6 +32,7 @@ class AndroidClipboardCaptureSource(
     private var capturing: Boolean = false
 
     private var onClipCapturedListener: ((String) -> Unit)? = null
+    private var onRichClipCapturedListener: ((type: String, content: String, mimeType: String, fileName: String?, sizeBytes: Long) -> Unit)? = null
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
         checkCurrentClip()
@@ -60,6 +67,10 @@ class AndroidClipboardCaptureSource(
         this.onClipCapturedListener = listener
     }
 
+    override fun setOnRichClipCapturedListener(listener: (type: String, content: String, mimeType: String, fileName: String?, sizeBytes: Long) -> Unit) {
+        this.onRichClipCapturedListener = listener
+    }
+
     override fun isCapturing(): Boolean = capturing
 
     override fun checkCurrentClip() {
@@ -69,9 +80,65 @@ class AndroidClipboardCaptureSource(
             val clipData = manager.primaryClip ?: return
             if (clipData.itemCount == 0) return
 
+            val description = clipData.description
             val item = clipData.getItemAt(0)
-            val text = item.text?.toString() ?: item.coerceToText(context)?.toString()
 
+            // 1. Check for Image / URI MIME types
+            val isImageMime = (0 until (description?.mimeTypeCount ?: 0)).any { idx ->
+                description?.getMimeType(idx)?.startsWith("image/") == true
+            }
+
+            if (isImageMime && item.uri != null) {
+                try {
+                    val mime = description?.getMimeType(0) ?: "image/png"
+                    val inputStream: InputStream? = context.contentResolver.openInputStream(item.uri)
+                    if (inputStream != null) {
+                        val buffer = ByteArrayOutputStream()
+                        val data = ByteArray(8192)
+                        var nRead: Int
+                        var totalRead = 0
+                        // Cap at 5MB for clipboard payload transmission
+                        while (inputStream.read(data, 0, data.size).also { nRead = it } != -1 && totalRead < 5 * 1024 * 1024) {
+                            buffer.write(data, 0, nRead)
+                            totalRead += nRead
+                        }
+                        inputStream.close()
+                        val bytes = buffer.toByteArray()
+                        if (bytes.isNotEmpty()) {
+                            val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            val fileName = item.uri.lastPathSegment ?: "image_${System.currentTimeMillis()}.png"
+                            onRichClipCapturedListener?.invoke(
+                                ClipboardItem.TYPE_IMAGE,
+                                base64Str,
+                                mime,
+                                fileName,
+                                bytes.size.toLong()
+                            )
+                            return
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not read image URI data: ${e.message}")
+                }
+            }
+
+            // 2. Check for HTML formatted text
+            val isHtml = description?.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML) == true && !item.htmlText.isNullOrBlank()
+            if (isHtml) {
+                val htmlContent = item.htmlText?.toString() ?: ""
+                val textFallback = item.text?.toString() ?: item.coerceToText(context)?.toString() ?: htmlContent
+                onRichClipCapturedListener?.invoke(
+                    ClipboardItem.TYPE_HTML,
+                    htmlContent,
+                    ClipboardItem.MIME_TEXT_HTML,
+                    null,
+                    htmlContent.toByteArray(Charsets.UTF_8).size.toLong()
+                )
+                return
+            }
+
+            // 3. Plain text / URLs / Code snippets
+            val text = item.text?.toString() ?: item.coerceToText(context)?.toString()
             if (!text.isNullOrBlank()) {
                 onClipCapturedListener?.invoke(text)
             }
@@ -84,11 +151,34 @@ class AndroidClipboardCaptureSource(
     override fun setClipText(text: String) {
         val manager = clipboardManager ?: return
         try {
-            val clipData = android.content.ClipData.newPlainText("Universal Clipboard", text)
+            val clipData = ClipData.newPlainText("Universal Clipboard", text)
             manager.setPrimaryClip(clipData)
-            Log.d(TAG, "Updated Android system primary clip successfully")
+            Log.d(TAG, "Updated Android system primary clip with text successfully")
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to update Android system clipboard: ${e.message}")
+            Log.w(TAG, "Failed to update Android system clipboard text: ${e.message}")
+        }
+    }
+
+    override fun setClipHtml(htmlText: String, plainTextFallback: String) {
+        val manager = clipboardManager ?: return
+        try {
+            val clipData = ClipData.newHtmlText("Universal Clipboard HTML", plainTextFallback, htmlText)
+            manager.setPrimaryClip(clipData)
+            Log.d(TAG, "Updated Android system primary clip with HTML successfully")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update Android system clipboard with HTML: ${e.message}")
+        }
+    }
+
+    override fun setClipRich(type: String, content: String, mimeType: String, fileName: String?) {
+        val manager = clipboardManager ?: return
+        try {
+            // Provide plain text fallback or rich data representation on system clip
+            val clipData = ClipData.newPlainText(fileName ?: "Universal Clipboard Item", content)
+            manager.setPrimaryClip(clipData)
+            Log.d(TAG, "Updated Android system primary clip for rich type $type")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update Android system clipboard for rich type $type: ${e.message}")
         }
     }
 
