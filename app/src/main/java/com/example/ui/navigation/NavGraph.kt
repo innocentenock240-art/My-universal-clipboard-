@@ -38,10 +38,12 @@ fun MainNavGraph(
 
     val clipboardItems by viewModel.clipboardItems.collectAsState()
     val isCaptureActive by viewModel.isCaptureActive.collectAsState()
+    val syncPolicy by viewModel.syncPolicy.collectAsState()
     val devices by viewModel.devices.collectAsState()
     val retentionDays by viewModel.retentionDays.collectAsState()
     val isWifiSyncEnabled by viewModel.isWifiSyncEnabled.collectAsState()
     val isBluetoothSyncEnabled by viewModel.isBluetoothSyncEnabled.collectAsState()
+    val isWifiDirectSyncEnabled by viewModel.isWifiDirectSyncEnabled.collectAsState()
     val isCloudSyncEnabled by viewModel.isCloudSyncEnabled.collectAsState()
 
     // Milestone 5.1 & 5.2 States
@@ -100,6 +102,8 @@ fun MainNavGraph(
                     ClipboardScreen(
                         items = clipboardItems,
                         isCaptureActive = isCaptureActive,
+                        isAutoSyncEnabled = syncPolicy.isAutoSyncEnabled,
+                        isSyncPaused = syncPolicy.isSyncPaused,
                         onAddItem = { text ->
                             viewModel.addClipboardItem(text)
                             onCopyText(text)
@@ -114,11 +118,15 @@ fun MainNavGraph(
                         onToggleFavorite = viewModel::toggleFavorite,
                         onTogglePin = viewModel::togglePin,
                         onDeleteItem = viewModel::deleteItem,
+                        onDeleteItems = viewModel::deleteItems,
+                        onSyncItem = { item -> viewModel.syncItemNow(item) },
                         onClearAll = viewModel::clearAllItems,
                         onCheckClipboard = viewModel::checkClipboardNow,
                         onToggleCapture = {
                             if (isCaptureActive) viewModel.stopClipboardCapture() else viewModel.startClipboardCapture()
-                        }
+                        },
+                        onToggleAutoSync = viewModel::toggleAutoSync,
+                        onTogglePauseSync = viewModel::togglePauseSync
                     )
                 }
                 NavigationTab.DEVICES -> {
@@ -145,9 +153,12 @@ fun MainNavGraph(
                         retentionDays = retentionDays,
                         isWifiSyncEnabled = isWifiSyncEnabled,
                         isBluetoothSyncEnabled = isBluetoothSyncEnabled,
+                        isWifiDirectSyncEnabled = isWifiDirectSyncEnabled,
                         isCloudSyncEnabled = isCloudSyncEnabled,
                         onRetentionDaysChanged = viewModel::setRetentionDays,
-                        onWifiSyncToggled = viewModel::setWifiSyncEnabled
+                        onWifiSyncToggled = viewModel::setWifiSyncEnabled,
+                        onBluetoothSyncToggled = viewModel::setBluetoothSyncEnabled,
+                        onWifiDirectSyncToggled = viewModel::setWifiDirectSyncEnabled
                     )
                 }
             }

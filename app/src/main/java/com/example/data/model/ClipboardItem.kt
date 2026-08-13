@@ -43,6 +43,31 @@ data class ClipboardItem(
         const val MIME_IMAGE_PNG = "image/png"
         const val MIME_IMAGE_JPEG = "image/jpeg"
         const val MIME_IMAGE_WEBP = "image/webp"
+        const val MIME_APPLICATION_PDF = "application/pdf"
         const val MIME_OCTET_STREAM = "application/octet-stream"
+
+        fun fromJsonString(jsonString: String): ClipboardItem? =
+            com.example.sync.model.parseClipboardItemFromJson(jsonString)
+    }
+
+    fun toJsonString(): String {
+        val json = org.json.JSONObject()
+        json.put("payloadType", "CLIPBOARD_ITEM")
+        json.put("id", id)
+        json.put("sourceDeviceId", sourceDeviceId)
+        json.put("sourceDeviceName", sourceDeviceName)
+        json.put("type", type)
+        json.put("content", content)
+        json.put("mimeType", mimeType)
+        if (fileName != null) {
+            json.put("fileName", fileName)
+        }
+        json.put("sizeBytes", if (sizeBytes > 0) sizeBytes else content.toByteArray(Charsets.UTF_8).size.toLong())
+        json.put("createdAt", createdAt)
+        json.put("expiresAt", expiresAt)
+        json.put("hash", hash)
+        json.put("isFavorite", isFavorite)
+        json.put("isPinned", isPinned)
+        return json.toString()
     }
 }

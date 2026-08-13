@@ -4,6 +4,10 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.core.policy.SyncPolicy
+import com.example.core.policy.SyncScope
+import com.example.core.transport.TransportManager
+import com.example.core.transport.TransportStatus
 import com.example.data.clipboard.AndroidClipboardCaptureSource
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.database.ClipboardDatabase
@@ -11,7 +15,9 @@ import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
 import com.example.data.repository.ClipboardRepository
 import com.example.sync.SyncEngine
+import com.example.sync.transport.BluetoothTransportAdapter
 import com.example.sync.transport.LocalWifiTransport
+import com.example.sync.transport.WifiDirectTransportAdapter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,6 +32,8 @@ class MainViewModel @JvmOverloads constructor(
         ClipboardDatabase.getInstance(application).clipboardItemDao()
     ),
     val localWifiTransport: LocalWifiTransport = LocalWifiTransport(context = application),
+    val bluetoothTransport: BluetoothTransportAdapter = BluetoothTransportAdapter(),
+    val wifiDirectTransport: WifiDirectTransportAdapter = WifiDirectTransportAdapter(),
     val syncEngine: SyncEngine = SyncEngine(listOf(localWifiTransport))
 ) : AndroidViewModel(application) {
 
@@ -39,6 +47,12 @@ class MainViewModel @JvmOverloads constructor(
     )
 
     private val clipboardCore = ClipboardCoreManager.getInstance(application, repository)
+
+    val transportManager = TransportManager(listOf(localWifiTransport, bluetoothTransport, wifiDirectTransport))
+    val transportStatuses: StateFlow<List<TransportStatus>> = transportManager.transportStatuses
+
+    private val _syncPolicy = MutableStateFlow(SyncPolicy())
+    val syncPolicy: StateFlow<SyncPolicy> = _syncPolicy.asStateFlow()
 
     private val _isWifiServerRunning = MutableStateFlow(false)
     val isWifiServerRunning: StateFlow<Boolean> = _isWifiServerRunning.asStateFlow()
@@ -75,8 +89,11 @@ class MainViewModel @JvmOverloads constructor(
     private val _isWifiSyncEnabled = MutableStateFlow(true)
     val isWifiSyncEnabled: StateFlow<Boolean> = _isWifiSyncEnabled.asStateFlow()
 
-    private val _isBluetoothSyncEnabled = MutableStateFlow(false)
+    private val _isBluetoothSyncEnabled = MutableStateFlow(true)
     val isBluetoothSyncEnabled: StateFlow<Boolean> = _isBluetoothSyncEnabled.asStateFlow()
+
+    private val _isWifiDirectSyncEnabled = MutableStateFlow(true)
+    val isWifiDirectSyncEnabled: StateFlow<Boolean> = _isWifiDirectSyncEnabled.asStateFlow()
 
     private val _isCloudSyncEnabled = MutableStateFlow(false)
     val isCloudSyncEnabled: StateFlow<Boolean> = _isCloudSyncEnabled.asStateFlow()
@@ -92,12 +109,15 @@ class MainViewModel @JvmOverloads constructor(
         }
         startClipboardCapture()
 
-        // Wire local clipboard capture to SyncEngine for auto-broadcasting
+        // Wire local clipboard capture to SyncEngine subject to user SyncPolicy
         clipboardCore.onItemProcessedListener = { item ->
-            if (_isWifiSyncEnabled.value) {
+            val policy = _syncPolicy.value
+            if (policy.shouldSyncItem(null, item.sizeBytes)) {
                 viewModelScope.launch(Dispatchers.IO) {
                     syncEngine.syncClipboardItem(item)
                 }
+            } else {
+                Log.d("MainViewModel", "Item kept local according to SyncPolicy [AutoSync: ${policy.isAutoSyncEnabled}, Paused: ${policy.isSyncPaused}]")
             }
         }
 
@@ -105,6 +125,11 @@ class MainViewModel @JvmOverloads constructor(
         viewModelScope.launch(Dispatchers.IO) {
             syncEngine.observeIncomingItems().collect { incomingItem ->
                 try {
+                    // Check if sender device is blocked in sync policy
+                    if (_syncPolicy.value.blockedDeviceIds.contains(incomingItem.sourceDeviceId)) {
+                        Log.w("MainViewModel", "Dropped incoming item from blocked device: ${incomingItem.sourceDeviceId}")
+                        return@collect
+                    }
                     clipboardCore.applyRemoteClipboardItem(incomingItem)
                     repository.insertClipboardItem(incomingItem)
                     Log.i("MainViewModel", "Persisted and applied remote ClipboardItem [ID: ${incomingItem.id}] from ${incomingItem.sourceDeviceName}")
@@ -121,6 +146,41 @@ class MainViewModel @JvmOverloads constructor(
             }
         }
         startWifiDiscovery()
+    }
+
+    fun toggleAutoSync() {
+        val current = _syncPolicy.value
+        _syncPolicy.value = current.copy(isAutoSyncEnabled = !current.isAutoSyncEnabled)
+        _isWifiSyncEnabled.value = _syncPolicy.value.isAutoSyncEnabled
+    }
+
+    fun togglePauseSync() {
+        val current = _syncPolicy.value
+        _syncPolicy.value = current.copy(isSyncPaused = !current.isSyncPaused)
+    }
+
+    fun syncItemNow(item: ClipboardItem, targetDeviceId: String? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (targetDeviceId != null) {
+                localWifiTransport.sendItem(item, targetDeviceId)
+            } else {
+                syncEngine.syncClipboardItem(item)
+            }
+        }
+    }
+
+    fun setDeviceBlocked(deviceId: String, blocked: Boolean) {
+        val current = _syncPolicy.value
+        val newBlocked = if (blocked) {
+            current.blockedDeviceIds + deviceId
+        } else {
+            current.blockedDeviceIds - deviceId
+        }
+        _syncPolicy.value = current.copy(blockedDeviceIds = newBlocked)
+    }
+
+    fun forgetDevice(deviceId: String) {
+        disconnectFromDevice(Device(deviceId = deviceId, deviceName = "", deviceType = ""))
     }
 
     fun addClipboardItem(text: String) {
@@ -212,6 +272,22 @@ class MainViewModel @JvmOverloads constructor(
 
     fun setWifiSyncEnabled(enabled: Boolean) {
         _isWifiSyncEnabled.value = enabled
+    }
+
+    fun setBluetoothSyncEnabled(enabled: Boolean) {
+        _isBluetoothSyncEnabled.value = enabled
+        viewModelScope.launch {
+            if (enabled) bluetoothTransport.startTransport() else bluetoothTransport.stopTransport()
+            transportManager.updateStatuses()
+        }
+    }
+
+    fun setWifiDirectSyncEnabled(enabled: Boolean) {
+        _isWifiDirectSyncEnabled.value = enabled
+        viewModelScope.launch {
+            if (enabled) wifiDirectTransport.startTransport() else wifiDirectTransport.stopTransport()
+            transportManager.updateStatuses()
+        }
     }
 
     // Milestone 5.2 Local Wi-Fi Discovery Methods

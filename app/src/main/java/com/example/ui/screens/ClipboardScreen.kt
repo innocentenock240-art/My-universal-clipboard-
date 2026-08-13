@@ -33,6 +33,8 @@ import com.example.data.model.ClipboardItem
 fun ClipboardScreen(
     items: List<ClipboardItem>,
     isCaptureActive: Boolean = true,
+    isAutoSyncEnabled: Boolean = true,
+    isSyncPaused: Boolean = false,
     onAddItem: (String) -> Unit,
     onAddRichItem: (type: String, content: String, mimeType: String, fileName: String?, sizeBytes: Long) -> Unit = { _, _, _, _, _ -> },
     onCopyItem: (String) -> Unit,
@@ -40,14 +42,20 @@ fun ClipboardScreen(
     onToggleFavorite: (String) -> Unit,
     onTogglePin: (String) -> Unit,
     onDeleteItem: (String) -> Unit,
+    onDeleteItems: (List<String>) -> Unit = {},
+    onSyncItem: (ClipboardItem) -> Unit = {},
     onClearAll: () -> Unit = {},
     onCheckClipboard: () -> Unit = {},
-    onToggleCapture: () -> Unit = {}
+    onToggleCapture: () -> Unit = {},
+    onToggleAutoSync: () -> Unit = {},
+    onTogglePauseSync: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var selectedFilterTab by remember { mutableStateOf(0) } // 0: All, 1: Favorites, 2: Pinned
+    var selectedFilterTab by remember { mutableStateOf(0) } // 0: All, 1: Local, 2: Synced, 3: Favorites, 4: Pinned
     var showAddDialog by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedItemIds by remember { mutableStateOf(setOf<String>()) }
 
     // Check system clipboard upon entering this screen
     LaunchedEffect(Unit) {
@@ -61,8 +69,10 @@ fun ClipboardScreen(
                     (item.fileName?.contains(searchQuery, ignoreCase = true) == true) ||
                     item.type.contains(searchQuery, ignoreCase = true)
             val matchesTab = when (selectedFilterTab) {
-                1 -> item.isFavorite
-                2 -> item.isPinned
+                1 -> item.sourceDeviceId.startsWith("dev_local") || item.sourceDeviceId.isBlank() // Local Only
+                2 -> !item.sourceDeviceId.startsWith("dev_local") && item.sourceDeviceId.isNotBlank() // Synced
+                3 -> item.isFavorite
+                4 -> item.isPinned
                 else -> true
             }
             matchesSearch && matchesTab
@@ -72,22 +82,54 @@ fun ClipboardScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Clipboard History", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = onCheckClipboard) {
-                        Icon(
-                            imageVector = Icons.Outlined.Sync,
-                            contentDescription = "Check System Clipboard",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                title = {
+                    if (isSelectionMode) {
+                        Text("Selected (${selectedItemIds.size})", fontWeight = FontWeight.Bold)
+                    } else {
+                        Text("Clipboard History", fontWeight = FontWeight.Bold)
                     }
-                    if (items.isNotEmpty()) {
-                        IconButton(onClick = { showClearDialog = true }) {
+                },
+                actions = {
+                    if (isSelectionMode) {
+                        IconButton(onClick = {
+                            selectedItemIds = items.map { it.id }.toSet()
+                        }) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "Select All")
+                        }
+                        IconButton(onClick = {
+                            if (selectedItemIds.isNotEmpty()) {
+                                onDeleteItems(selectedItemIds.toList())
+                                isSelectionMode = false
+                                selectedItemIds = emptySet()
+                            }
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete Selected", tint = MaterialTheme.colorScheme.error)
+                        }
+                        IconButton(onClick = {
+                            isSelectionMode = false
+                            selectedItemIds = emptySet()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel Selection")
+                        }
+                    } else {
+                        IconButton(onClick = onCheckClipboard) {
                             Icon(
-                                imageVector = Icons.Outlined.DeleteSweep,
-                                contentDescription = "Clear All History",
-                                tint = MaterialTheme.colorScheme.error
+                                imageVector = Icons.Outlined.Sync,
+                                contentDescription = "Check System Clipboard",
+                                tint = MaterialTheme.colorScheme.primary
                             )
+                        }
+                        if (items.isNotEmpty()) {
+                            IconButton(onClick = { isSelectionMode = true }) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = "Selection Mode")
+                            }
+                            IconButton(onClick = { showClearDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.DeleteSweep,
+                                    contentDescription = "Clear All History",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 },
@@ -97,16 +139,18 @@ fun ClipboardScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAddDialog = true },
-                modifier = Modifier.testTag("add_clipboard_fab"),
-                containerColor = MaterialTheme.colorScheme.primary
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add Clipboard Item",
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
+            if (!isSelectionMode) {
+                FloatingActionButton(
+                    onClick = { showAddDialog = true },
+                    modifier = Modifier.testTag("add_clipboard_fab"),
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Clipboard Item",
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -115,13 +159,15 @@ fun ClipboardScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Privacy & Active Capture Banner
+            // Universal Synchronization & Capture Policy Controls
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isCaptureActive)
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    containerColor = if (isSyncPaused)
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                    else if (isAutoSyncEnabled)
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
                     else
                         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 ),
@@ -130,44 +176,47 @@ fun ClipboardScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.weight(1f)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Security,
-                            contentDescription = null,
-                            tint = if (isCaptureActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = if (isCaptureActive) "Clipboard capture: Active (Foreground)" else "Clipboard capture: Stopped",
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isSyncPaused) "Universal Sync: PAUSED"
+                                else if (isAutoSyncEnabled) "Universal Sync: AUTO (Active)"
+                                else "Universal Sync: LOCAL ONLY (Manual)",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isSyncPaused) "Sync is paused. Items stay on this device."
+                                else if (isAutoSyncEnabled) "Copies sync to connected trusted peers."
+                                else "Auto-sync disabled. Tap 'Sync' on any item to send.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedButton(
+                                onClick = onTogglePauseSync,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (isSyncPaused) "Resume" else "Pause", fontSize = 11.sp)
+                            }
+                            FilledTonalButton(
+                                onClick = onToggleAutoSync,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (isAutoSyncEnabled) "Auto ON" else "Auto OFF", fontSize = 11.sp)
+                            }
+                        }
                     }
-                    Switch(
-                        checked = isCaptureActive,
-                        onCheckedChange = { onToggleCapture() },
-                        modifier = Modifier.testTag("toggle_capture_switch")
-                    )
                 }
-                Text(
-                    text = "Rich content support active: Plain text, Unicode, URLs, Code, HTML, Images, and Files with SHA-256 integrity.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
-        }
 
             // Search Bar
             OutlinedTextField(
@@ -194,10 +243,11 @@ fun ClipboardScreen(
                 shape = RoundedCornerShape(12.dp)
             )
 
-            // Filter Tabs
-            PrimaryTabRow(
+            // Filter Tabs (All, Local, Synced, Favorites, Pinned)
+            ScrollableTabRow(
                 selectedTabIndex = selectedFilterTab,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                edgePadding = 0.dp
             ) {
                 Tab(
                     selected = selectedFilterTab == 0,
@@ -207,11 +257,21 @@ fun ClipboardScreen(
                 Tab(
                     selected = selectedFilterTab == 1,
                     onClick = { selectedFilterTab = 1 },
-                    text = { Text("Favorites (${items.count { it.isFavorite }})") }
+                    text = { Text("Local (${items.count { it.sourceDeviceId.startsWith("dev_local") || it.sourceDeviceId.isBlank() }})") }
                 )
                 Tab(
                     selected = selectedFilterTab == 2,
                     onClick = { selectedFilterTab = 2 },
+                    text = { Text("Synced (${items.count { !it.sourceDeviceId.startsWith("dev_local") && it.sourceDeviceId.isNotBlank() }})") }
+                )
+                Tab(
+                    selected = selectedFilterTab == 3,
+                    onClick = { selectedFilterTab = 3 },
+                    text = { Text("Favorites (${items.count { it.isFavorite }})") }
+                )
+                Tab(
+                    selected = selectedFilterTab == 4,
+                    onClick = { selectedFilterTab = 4 },
                     text = { Text("Pinned (${items.count { it.isPinned }})") }
                 )
             }
@@ -235,12 +295,19 @@ fun ClipboardScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(filteredItems, key = { it.id }) { item ->
+                        val isSelected = selectedItemIds.contains(item.id)
                         ClipboardItemCard(
                             item = item,
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onSelect = {
+                                selectedItemIds = if (isSelected) selectedItemIds - item.id else selectedItemIds + item.id
+                            },
                             onCopy = { onCopyClipboardItem(item) },
                             onToggleFavorite = { onToggleFavorite(item.id) },
                             onTogglePin = { onTogglePin(item.id) },
-                            onDelete = { onDeleteItem(item.id) }
+                            onDelete = { onDeleteItem(item.id) },
+                            onSync = { onSyncItem(item) }
                         )
                     }
                     item { Spacer(modifier = Modifier.height(80.dp)) }
@@ -291,17 +358,26 @@ fun ClipboardScreen(
 @Composable
 fun ClipboardItemCard(
     item: ClipboardItem,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onSelect: () -> Unit = {},
     onCopy: () -> Unit,
     onToggleFavorite: () -> Unit,
     onTogglePin: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onSync: () -> Unit = {}
 ) {
+    val isLocal = item.sourceDeviceId.startsWith("dev_local") || item.sourceDeviceId.isBlank()
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("item_card_${item.id}"),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            else
+                MaterialTheme.colorScheme.surface
         )
     ) {
         Column(
@@ -310,7 +386,7 @@ fun ClipboardItemCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Header Row: Type Badge + Device Name + Favorite/Pin
+            // Header Row: Type Badge + Device Name + Selection/Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -320,6 +396,13 @@ fun ClipboardItemCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    if (isSelectionMode) {
+                        Checkbox(
+                            checked = isSelected,
+                            onCheckedChange = { onSelect() }
+                        )
+                    }
+
                     SuggestionChip(
                         onClick = {},
                         label = { Text(item.type, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
@@ -342,6 +425,20 @@ fun ClipboardItemCard(
                             labelColor = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     )
+
+                    Surface(
+                        color = if (isLocal) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = if (isLocal) "LOCAL" else "SYNCED",
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp,
+                            color = if (isLocal) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
 
                     Text(
                         text = item.sourceDeviceName,
@@ -484,6 +581,19 @@ fun ClipboardItemCard(
                             contentDescription = "Delete",
                             tint = MaterialTheme.colorScheme.error
                         )
+                    }
+                    OutlinedButton(
+                        onClick = onSync,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudUpload,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "Sync", fontSize = 11.sp)
                     }
                     Button(
                         onClick = onCopy,

@@ -20,9 +20,12 @@ fun SettingsScreen(
     retentionDays: Int,
     isWifiSyncEnabled: Boolean,
     isBluetoothSyncEnabled: Boolean,
+    isWifiDirectSyncEnabled: Boolean = true,
     isCloudSyncEnabled: Boolean,
     onRetentionDaysChanged: (Int) -> Unit,
-    onWifiSyncToggled: (Boolean) -> Unit
+    onWifiSyncToggled: (Boolean) -> Unit,
+    onBluetoothSyncToggled: (Boolean) -> Unit = {},
+    onWifiDirectSyncToggled: (Boolean) -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -101,7 +104,7 @@ fun SettingsScreen(
             // Sync Transports Section
             item {
                 Text(
-                    text = "Sync Transports",
+                    text = "Allowed Sync Transports",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -132,9 +135,24 @@ fun SettingsScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Column {
-                                    Text(text = "Local Wi-Fi Network", fontWeight = FontWeight.SemiBold)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(text = "Local Wi-Fi Network", fontWeight = FontWeight.SemiBold)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "PRIMARY",
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = "Fast & local-first direct synchronization",
+                                        text = "High-speed local LAN synchronization over TCP & mDNS",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -149,7 +167,7 @@ fun SettingsScreen(
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
-                        // Bluetooth Transport (Future)
+                        // Bluetooth Transport (Active / Allowed)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -165,26 +183,27 @@ fun SettingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.Bluetooth,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = MaterialTheme.colorScheme.primary
                                 )
                                 Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(text = "Bluetooth Low Energy", fontWeight = FontWeight.SemiBold)
+                                        Text(text = "Bluetooth Classic / BLE", fontWeight = FontWeight.SemiBold)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            color = MaterialTheme.colorScheme.secondaryContainer,
                                             shape = RoundedCornerShape(4.dp)
                                         ) {
                                             Text(
-                                                text = "FUTURE",
+                                                text = "ALLOWED",
                                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                                 fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
                                             )
                                         }
                                     }
                                     Text(
-                                        text = "Direct pairing without shared Wi-Fi network",
+                                        text = "Secondary transport for small/medium payloads and off-grid discovery",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -192,14 +211,14 @@ fun SettingsScreen(
                             }
                             Switch(
                                 checked = isBluetoothSyncEnabled,
-                                onCheckedChange = {},
-                                enabled = false
+                                onCheckedChange = onBluetoothSyncToggled,
+                                modifier = Modifier.testTag("bluetooth_sync_switch")
                             )
                         }
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
 
-                        // Cloud Sync Transport (Future)
+                        // Wi-Fi Direct (P2P) Transport (Active / Allowed)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -213,35 +232,87 @@ fun SettingsScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.CloudSync,
+                                    imageVector = Icons.Default.NetworkCheck,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = MaterialTheme.colorScheme.primary
                                 )
                                 Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(text = "Encrypted Cloud Sync", fontWeight = FontWeight.SemiBold)
+                                        Text(text = "Wi-Fi Direct (P2P)", fontWeight = FontWeight.SemiBold)
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            color = MaterialTheme.colorScheme.secondaryContainer,
                                             shape = RoundedCornerShape(4.dp)
                                         ) {
                                             Text(
-                                                text = "FUTURE",
+                                                text = "ALLOWED",
                                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                                                 fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
                                             )
                                         }
                                     }
                                     Text(
-                                        text = "Sync across remote networks with end-to-end encryption",
+                                        text = "Direct high-throughput transfers without a shared router or AP",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                             Switch(
-                                checked = isCloudSyncEnabled,
+                                checked = isWifiDirectSyncEnabled,
+                                onCheckedChange = onWifiDirectSyncToggled,
+                                modifier = Modifier.testTag("wifi_direct_sync_switch")
+                            )
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                        // USB / Wired IP Network Transport (Allowed / Active)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Usb,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(text = "USB / Wired IP Network", fontWeight = FontWeight.SemiBold)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.secondaryContainer,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "ALLOWED",
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = "Direct TCP loopback & Ethernet networking for ultra-low latency",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = true,
                                 onCheckedChange = {},
                                 enabled = false
                             )
@@ -253,7 +324,7 @@ fun SettingsScreen(
             // Custom Keyboard (IME) Integration Card
             item {
                 Text(
-                    text = "Custom Keyboard (IME)",
+                    text = "Companion Keyboard (IME)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -279,13 +350,28 @@ fun SettingsScreen(
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )
-                            Text(
-                                text = "Android Keyboard Integration",
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Android Keyboard Integration",
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "READY",
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
                         }
                         Text(
-                            text = "Universal Clipboard architecture includes a InputMethodService placeholder for Milestone 10. You will be able to select and paste clipboard items directly inside any Android application.",
+                            text = "Universal Clipboard IME is implemented and available. Enable 'Universal Clipboard' in Android System Settings > System > Languages & Input to insert synchronized clipboard items directly in any app.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
