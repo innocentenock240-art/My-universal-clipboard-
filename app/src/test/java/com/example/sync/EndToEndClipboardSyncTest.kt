@@ -3,7 +3,6 @@ package com.example.sync
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.model.ClipboardItem
 import com.example.data.model.Device
-import com.example.sync.model.toJsonString
 import com.example.sync.transport.LocalWifiTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

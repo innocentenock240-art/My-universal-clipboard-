@@ -10,7 +10,6 @@ import com.example.core.protocol.ProtocolMessageType
 import com.example.core.transport.TransportStatus
 import com.example.core.transport.TransportType
 import com.example.data.model.ClipboardItem
-import com.example.sync.model.toJsonString
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith

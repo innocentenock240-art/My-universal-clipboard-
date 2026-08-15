@@ -179,7 +179,7 @@ class LocalWifiTransport(
     }
 
     val localDeviceName: String by lazy {
-        DeviceIdentityManager.getLocalDeviceName()
+        DeviceIdentityManager.getLocalDeviceName(context)
     }
 
     // Resolution Queue to prevent NsdManager.FAILURE_ALREADY_ACTIVE (Error 3)
@@ -540,7 +540,7 @@ class LocalWifiTransport(
                 device.connectionState
             }
             updatedDevice = device.copy(
-                deviceId = if (device.deviceId.startsWith("dev_local_")) device.deviceId else existing.deviceId,
+                deviceId = if (device.deviceId.isNotBlank() && device.deviceId != "target_ip" && !device.deviceId.startsWith("dev_192_")) device.deviceId else existing.deviceId,
                 isPaired = isKnown || existing.isPaired,
                 connectionState = preservedState
             )
@@ -950,8 +950,7 @@ class LocalWifiTransport(
                     val response = if (trimmed.contains("deviceId=")) {
                         "ACK deviceId=$localDeviceId;deviceName=${localDeviceName.replace(" ", "_")}"
                     } else if (trimmed.startsWith("HELLO_")) {
-                        val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { null }
-                        val devName = if (rawModel.isNullOrBlank()) "DEVICE" else rawModel.replace(" ", "_")
+                        val devName = if (localDeviceName.isNullOrBlank()) "DEVICE" else localDeviceName.replace(" ", "_")
                         "ACK_FROM_$devName"
                     } else {
                         "ACK_OK"

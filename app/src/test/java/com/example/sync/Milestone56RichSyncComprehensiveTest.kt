@@ -3,7 +3,6 @@ package com.example.sync
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.model.ClipboardItem
 import com.example.sync.model.parseClipboardItemFromJson
-import com.example.sync.model.toJsonString
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith

@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.core.identity.DeviceIdentityManager
 import com.example.core.policy.SyncPolicy
 import com.example.core.policy.SyncScope
 import com.example.core.transport.NetworkPresenceMonitor
@@ -39,14 +40,7 @@ class MainViewModel @JvmOverloads constructor(
     val syncEngine: SyncEngine = SyncEngine(transportManager)
 ) : AndroidViewModel(application) {
 
-    private val localDevice = Device(
-        deviceId = "dev_local_${android.os.Build.MODEL.replace(" ", "_")}",
-        deviceName = if (android.os.Build.MODEL.isNullOrBlank()) "Local Android Device" else android.os.Build.MODEL,
-        deviceType = "PHONE",
-        isLocalDevice = true,
-        isOnline = true,
-        isPaired = true
-    )
+    private val localDevice = DeviceIdentityManager.getLocalDevice(application)
 
     private val clipboardCore = ClipboardCoreManager.getInstance(application, repository)
     val networkPresenceMonitor = NetworkPresenceMonitor(application)

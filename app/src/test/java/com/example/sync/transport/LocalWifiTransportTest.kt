@@ -66,7 +66,7 @@ class LocalWifiTransportTest {
 
         // Same app instance context should retrieve the same persistent unique ID from SharedPreferences
         assertEquals(id1, id2)
-        assertTrue(id1.startsWith("dev_local_"))
+        assertTrue(id1.startsWith("uclip_dev_") || id1.startsWith("dev_"))
     }
 
     @Test
