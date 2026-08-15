@@ -5,12 +5,12 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.example.core.identity.DeviceIdentityManager
 import com.example.data.clipboard.ClipboardCoreManager
 import com.example.data.model.ClipboardItem
 import com.example.data.model.ConnectionState
 import com.example.data.model.Device
 import com.example.sync.model.parseClipboardItemFromJson
-import com.example.sync.model.toJsonString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,7 +51,6 @@ class LocalWifiTransport(
         private const val SERVICE_TYPE = "_uclip._tcp"
         private const val TAG = "LocalWifiTransport"
         private const val PREFS_NAME = "uclip_device_prefs"
-        private const val KEY_DEVICE_ID = "local_device_id"
         private const val KEY_KNOWN_PEERS = "known_peer_device_ids"
     }
 
@@ -176,31 +175,11 @@ class LocalWifiTransport(
     }
 
     val localDeviceId: String by lazy {
-        if (!customDeviceId.isNullOrBlank()) {
-            return@lazy customDeviceId
-        }
-        val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { "Android" }
-        val cleanModel = if (rawModel.isNullOrBlank()) "Android" else rawModel.replace(" ", "_")
-
-        context?.let { ctx ->
-            try {
-                val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                var storedId = prefs.getString(KEY_DEVICE_ID, null)
-                if (storedId.isNullOrBlank()) {
-                    val randomSuffix = UUID.randomUUID().toString().replace("-", "").take(6)
-                    storedId = "dev_local_${cleanModel}_$randomSuffix"
-                    prefs.edit().putString(KEY_DEVICE_ID, storedId).apply()
-                }
-                storedId
-            } catch (e: Throwable) {
-                "dev_local_$cleanModel"
-            }
-        } ?: "dev_local_$cleanModel"
+        DeviceIdentityManager.getLocalDeviceId(context, customDeviceId)
     }
 
     val localDeviceName: String by lazy {
-        val rawModel = try { android.os.Build.MODEL } catch (e: Throwable) { "Android Device" }
-        if (rawModel.isNullOrBlank()) "Android Device" else rawModel
+        DeviceIdentityManager.getLocalDeviceName()
     }
 
     // Resolution Queue to prevent NsdManager.FAILURE_ALREADY_ACTIVE (Error 3)
@@ -517,7 +496,7 @@ class LocalWifiTransport(
         } catch (e: Throwable) { null }
 
         if (devId.isNullOrBlank()) {
-            devId = "dev_" + serviceInfo.serviceName.replace(" ", "_")
+            devId = serviceInfo.serviceName.removePrefix("UClip_")
         }
         if (devName.isNullOrBlank()) {
             devName = serviceInfo.serviceName.removePrefix("UClip_").replace("_", " ")
@@ -561,6 +540,7 @@ class LocalWifiTransport(
                 device.connectionState
             }
             updatedDevice = device.copy(
+                deviceId = if (device.deviceId.startsWith("dev_local_")) device.deviceId else existing.deviceId,
                 isPaired = isKnown || existing.isPaired,
                 connectionState = preservedState
             )
@@ -754,24 +734,32 @@ class LocalWifiTransport(
                     return@withContext false
                 }
 
-                Log.i(TAG, "Peer identity verified for device $deviceId ($remoteDeviceName). Session CONNECTED.")
+                val finalDeviceId = remoteDeviceId ?: deviceId
+                Log.i(TAG, "Peer identity verified for device $finalDeviceId ($remoteDeviceName). Session CONNECTED.")
 
                 // Remember this peer for future automatic reconnection
-                addKnownPeer(deviceId)
-                reconnectingJobs.remove(deviceId)?.cancel()
+                addKnownPeer(finalDeviceId)
+                reconnectingJobs.remove(finalDeviceId)?.cancel()
 
                 val session = PeerSession(
-                    deviceId = deviceId,
+                    deviceId = finalDeviceId,
                     deviceName = remoteDeviceName ?: targetDevice.deviceName,
                     socket = socket,
                     reader = reader,
                     writer = writer
                 )
 
-                activeSessions[deviceId]?.closeSilently()
-                activeSessions[deviceId] = session
+                activeSessions[finalDeviceId]?.closeSilently()
+                activeSessions[finalDeviceId] = session
 
-                updateDeviceConnectionState(deviceId, ConnectionState.CONNECTED)
+                val connectedDevice = targetDevice.copy(
+                    deviceId = finalDeviceId,
+                    deviceName = remoteDeviceName ?: targetDevice.deviceName,
+                    isPaired = true,
+                    connectionState = ConnectionState.CONNECTED
+                )
+                addDiscoveredDevice(connectedDevice)
+                updateDeviceConnectionState(finalDeviceId, ConnectionState.CONNECTED)
                 startSessionMonitoring(session)
                 true
             } catch (e: Exception) {
@@ -800,21 +788,29 @@ class LocalWifiTransport(
     }
 
     private suspend fun processIncomingClipboardItem(item: ClipboardItem, writer: PrintWriter? = null): Boolean {
+        Log.i("SyncDiagnostics", "[SYNC_PATH_10_DESERIALIZATION] Deserialized item ID=${item.id}, source=${item.sourceDeviceId} (${item.sourceDeviceName}), length=${item.content.length}, type=${item.type}")
+
         // 1. Validate SHA-256 Hash
         val computedHash = ClipboardCoreManager.computeSha256(item.content)
-        if (computedHash != item.hash) {
+        val hashMatches = computedHash.equals(item.hash, ignoreCase = true)
+        val isSelfEcho = item.sourceDeviceId == localDeviceId
+
+        if (!hashMatches) {
             Log.e(TAG, "SHA-256 hash validation failed for item [${item.id}]. Expected: ${item.hash}, Computed: $computedHash")
             writer?.println("ERROR_HASH_MISMATCH")
+            Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Receiver sent ERROR_HASH_MISMATCH")
             return false
         }
 
         // 2. Self Device & Echo Loop Prevention
-        if (item.sourceDeviceId == localDeviceId) {
+        if (isSelfEcho) {
             Log.w(TAG, "Ignoring echo item from self device ID: ${item.sourceDeviceId}")
             writer?.println("ACK_ECHO_SKIPPED")
+            Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Receiver sent ACK_ECHO_SKIPPED")
             return false
         }
 
+        // 3. Deduplication Check
         val isDuplicate = synchronized(recentlyProcessedHashes) {
             if (recentlyProcessedHashes.contains(item.hash)) {
                 true
@@ -831,14 +827,31 @@ class LocalWifiTransport(
             }
         }
 
+        Log.i("SyncDiagnostics", "[SYNC_PATH_11_HASH_VALIDATION] Hash validation: computed=${computedHash.take(8)}, expected=${item.hash.take(8)}, match=$hashMatches, isSelfEcho=$isSelfEcho, isDuplicate=$isDuplicate")
+
         if (isDuplicate) {
             Log.w(TAG, "Ignoring duplicate item with hash prefix: ${item.hash.take(8)}")
             writer?.println("ACK_DUPLICATE_SKIPPED")
+            Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Receiver sent ACK_DUPLICATE_SKIPPED")
             return false
         }
 
-        // 3. Accepted
+        // 4. Automatically register sender peer device so bi-directional sync immediately works
+        if (item.sourceDeviceId != localDeviceId) {
+            val peerDevice = Device(
+                deviceId = item.sourceDeviceId,
+                deviceName = item.sourceDeviceName,
+                deviceType = "PHONE",
+                isLocalDevice = false,
+                isOnline = true,
+                isPaired = true
+            )
+            addDiscoveredDevice(peerDevice)
+        }
+
+        // 5. Accepted
         writer?.println("ACK_OK")
+        Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Receiver confirmed item ${item.id} with ACK_OK")
         _incomingItems.emit(item)
         _incomingMessages.emit("Received ClipboardItem [ID: ${item.id}, Source: ${item.sourceDeviceName}, ContentLength: ${item.content.length}]")
         Log.i(TAG, "Successfully received and validated remote ClipboardItem [ID: ${item.id}, HashPrefix: ${item.hash.take(8)}]")
@@ -856,11 +869,15 @@ class LocalWifiTransport(
                         break
                     }
                     if (trimmed.startsWith("{")) {
+                        Log.i("SyncDiagnostics", "[SYNC_PATH_9_RECEPTION] Received raw JSON item over session ${session.deviceId}")
                         val item = parseClipboardItemFromJson(trimmed)
                         if (item != null) {
                             processIncomingClipboardItem(item, session.writer)
                             continue
                         }
+                    }
+                    if (trimmed.startsWith("ACK_")) {
+                        Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Received session ACK from ${session.deviceId}: $trimmed")
                     }
                     _incomingMessages.emit("Session [${session.deviceId}]: $trimmed")
                 }
@@ -900,9 +917,24 @@ class LocalWifiTransport(
                 val message = reader.readLine()
                 if (message != null) {
                     val trimmed = message.trim()
+                    val remoteHost = socket.inetAddress?.hostAddress ?: "127.0.0.1"
+
                     if (trimmed.startsWith("{")) {
+                        Log.i("SyncDiagnostics", "[SYNC_PATH_9_RECEPTION] Received raw JSON item from TCP $remoteHost:${socket.port}")
                         val item = parseClipboardItemFromJson(trimmed)
                         if (item != null) {
+                            if (item.sourceDeviceId != localDeviceId) {
+                                val peerDevice = Device(
+                                    deviceId = item.sourceDeviceId,
+                                    deviceName = item.sourceDeviceName,
+                                    ipAddress = remoteHost,
+                                    isLocalDevice = false,
+                                    isOnline = true,
+                                    isPaired = true,
+                                    connectionState = ConnectionState.CONNECTED
+                                )
+                                addDiscoveredDevice(peerDevice)
+                            }
                             processIncomingClipboardItem(item, writer)
                             return@withContext
                         }
@@ -938,7 +970,7 @@ class LocalWifiTransport(
                         val peerDevice = Device(
                             deviceId = peerDeviceId,
                             deviceName = peerDeviceName,
-                            ipAddress = socket.inetAddress?.hostAddress ?: "127.0.0.1",
+                            ipAddress = remoteHost,
                             isLocalDevice = false,
                             isOnline = true,
                             isPaired = true,
@@ -992,6 +1024,23 @@ class LocalWifiTransport(
 
                 val ack = reader.readLine()
                 Log.d(TAG, "Received ACK '$ack' from $targetIp:$targetPort")
+
+                val remoteDeviceId = parseKeyFromMessage(ack ?: "", "deviceId")
+                val remoteDeviceName = parseKeyFromMessage(ack ?: "", "deviceName")
+                val devId = remoteDeviceId ?: "dev_${targetIp.replace(".", "_")}"
+                val devName = remoteDeviceName ?: "Device at $targetIp"
+
+                val discoveredDevice = Device(
+                    deviceId = devId,
+                    deviceName = devName,
+                    ipAddress = targetIp,
+                    isLocalDevice = false,
+                    isOnline = true,
+                    isPaired = true,
+                    connectionState = ConnectionState.DISCOVERED
+                )
+                addDiscoveredDevice(discoveredDevice)
+
                 ack
             } catch (e: Exception) {
                 Log.e(TAG, "Handshake failed to $targetIp:$targetPort", e)
@@ -1009,6 +1058,7 @@ class LocalWifiTransport(
     override suspend fun sendItem(item: ClipboardItem, targetDeviceId: String): Boolean {
         return withContext(Dispatchers.IO) {
             val jsonPayload = item.toJsonString()
+            Log.i("SyncDiagnostics", "[SYNC_PATH_6_MESSAGE_CREATION] Serialized item ${item.id} to JSON payload (${jsonPayload.toByteArray(Charsets.UTF_8).size} bytes, hash=${item.hash.take(8)})")
 
             // 1. Try sending over active persistent PeerSessions first
             var sentViaSession = false
@@ -1019,8 +1069,11 @@ class LocalWifiTransport(
                     activeSessions.values
                 }
 
+                Log.i("SyncDiagnostics", "[SYNC_PATH_5_SESSION_STATE] Active PeerSessions available: ${sessionTargets.size}")
+
                 for (session in sessionTargets) {
                     try {
+                        Log.i("SyncDiagnostics", "[SYNC_PATH_7_TCP_WRITE] Writing item ${item.id} over active PeerSession to ${session.deviceId}")
                         session.writer.println(jsonPayload)
                         session.writer.flush()
                         Log.i(TAG, "Sent ClipboardItem ${item.id} via active PeerSession to ${session.deviceId}")
@@ -1035,6 +1088,7 @@ class LocalWifiTransport(
             }
 
             if (sentViaSession) {
+                Log.i("SyncDiagnostics", "[SYNC_PATH_RESULT] Sent item ${item.id} via active PeerSession successfully")
                 return@withContext true
             }
 
@@ -1046,6 +1100,8 @@ class LocalWifiTransport(
             } else {
                 _discoveredDevices.value.filter { !it.ipAddress.isNullOrBlank() && it.deviceId != localDeviceId }
             }
+
+            Log.i("SyncDiagnostics", "[SYNC_PATH_3_TARGET_SELECTION] Candidate target peers count: ${targets.size} (${targets.map { "${it.deviceId}@${it.ipAddress}" }})")
 
             if (targets.isEmpty()) {
                 Log.w(TAG, "No active discovered target devices found to send ClipboardItem ${item.id}")
@@ -1060,19 +1116,23 @@ class LocalWifiTransport(
 
                 var socket: Socket? = null
                 try {
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_7_TCP_WRITE] Connecting TCP to $targetIp:$targetPort for item ${item.id}...")
                     socket = Socket(targetIp, targetPort)
                     socket.soTimeout = 5000
                     val writer = PrintWriter(socket.getOutputStream(), true)
                     val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
 
                     writer.println(jsonPayload)
-                    Log.d(TAG, "Sent ClipboardItem ${item.id} to $targetIp:$targetPort")
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_7_TCP_WRITE] Sent ClipboardItem ${item.id} to $targetIp:$targetPort, waiting for receiver ACK...")
 
                     val ack = reader.readLine()
-                    Log.d(TAG, "Received ACK '$ack' for item ${item.id} from $targetIp:$targetPort")
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_8_TCP_ACK] Received receiver confirmation '$ack' for item ${item.id} from $targetIp:$targetPort")
 
                     if (ack == "ACK_OK" || ack == "ACK_DUPLICATE_SKIPPED" || ack == "ACK_ECHO_SKIPPED" || ack?.startsWith("ACK_") == true) {
                         sentSuccessfully = true
+                        Log.i("SyncDiagnostics", "[SYNC_PATH_RESULT] Remote receiver confirmed processing item ${item.id} with '$ack'")
+                    } else {
+                        Log.w("SyncDiagnostics", "[SYNC_PATH_RESULT] Receiver responded with error/unexpected ACK: '$ack'")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to send ClipboardItem ${item.id} to $targetIp:$targetPort", e)

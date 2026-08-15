@@ -22,6 +22,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.security.MessageDigest
 
 /**
@@ -29,6 +32,8 @@ import java.security.MessageDigest
  * Comprehensive verification of Universal Core, SyncPolicy, Multi-Transport Manager,
  * Rich Content, Loop Prevention, and Device Trust.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class AndroidCompletionHardeningTestSuite {
 
     private fun sha256(text: String): String {

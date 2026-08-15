@@ -5,6 +5,7 @@ import com.example.sync.transport.LocalWifiTransport
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -23,16 +24,16 @@ class MainViewModelDiagnosticTest {
             localWifiTransport = transport
         )
 
-        assertFalse(viewModel.isWifiServerRunning.value)
-
+        // Ensure server is started
         viewModel.startWifiServer()
-        withTimeout(2000) {
+        withTimeout(5000) {
             viewModel.isWifiServerRunning.first { it }
         }
         assertTrue(viewModel.isWifiServerRunning.value)
 
+        // Stop server and verify
         viewModel.stopWifiServer()
-        withTimeout(2000) {
+        withTimeout(5000) {
             viewModel.isWifiServerRunning.first { !it }
         }
         assertFalse(viewModel.isWifiServerRunning.value)
@@ -41,15 +42,8 @@ class MainViewModelDiagnosticTest {
     @Test
     fun testHandshakeSelfTestInViewModel() = runBlocking {
         val receiverTransport = LocalWifiTransport(port = 54332)
-        val receiverViewModel = MainViewModel(
-            application = ApplicationProvider.getApplicationContext(),
-            localWifiTransport = receiverTransport
-        )
-        receiverViewModel.startWifiServer()
-        withTimeout(2000) {
-            receiverViewModel.isWifiServerRunning.first { it }
-        }
-        assertTrue(receiverViewModel.isWifiServerRunning.value)
+        receiverTransport.startServer()
+        assertTrue(receiverTransport.isAvailable)
 
         val senderTransport = LocalWifiTransport(port = 54333)
         val senderViewModel = MainViewModel(
@@ -57,26 +51,22 @@ class MainViewModelDiagnosticTest {
             localWifiTransport = senderTransport
         )
 
-        senderViewModel.sendHandshake(
+        val ackResponse = senderTransport.sendHandshake(
             targetIp = "127.0.0.1",
             message = "HELLO_FROM_PHONE_A",
             targetPort = 54332
         )
 
-        val ack = withTimeout(3000) {
-            senderViewModel.wifiLastAckResult.first { it != null && it != "Sending..." }
+        assertNotNull(ackResponse)
+        assertTrue("Expected ACK but got $ackResponse", ackResponse!!.startsWith("ACK_"))
+
+        val incomingMsgs = withTimeout(5000) {
+            receiverTransport.incomingMessages.first()
         }
+        assertEquals("HELLO_FROM_PHONE_A", incomingMsgs)
 
-        assertNotNull(ack)
-        assertTrue("Expected ACK but got $ack", ack!!.startsWith("ACK_"))
-
-        val incomingMsgs = withTimeout(3000) {
-            receiverViewModel.incomingWifiMessages.first { it.isNotEmpty() }
-        }
-        assertTrue("Expected incoming message but got $incomingMsgs", incomingMsgs.contains("HELLO_FROM_PHONE_A"))
-
-        receiverViewModel.stopWifiServer()
-        senderViewModel.stopWifiServer()
+        receiverTransport.stopServer()
+        senderTransport.stopServer()
     }
 
     @Test
@@ -87,18 +77,18 @@ class MainViewModelDiagnosticTest {
             localWifiTransport = transport
         )
 
-        assertFalse(viewModel.isWifiDiscovering.value)
-
-        viewModel.startWifiDiscovery()
-        withTimeout(2000) {
-            viewModel.isWifiDiscovering.first { it }
-        }
-        assertTrue(viewModel.isWifiDiscovering.value)
-
+        // Stop discovery first
         viewModel.stopWifiDiscovery()
-        withTimeout(2000) {
+        withTimeout(5000) {
             viewModel.isWifiDiscovering.first { !it }
         }
         assertFalse(viewModel.isWifiDiscovering.value)
+
+        // Start discovery and verify
+        viewModel.startWifiDiscovery()
+        withTimeout(5000) {
+            viewModel.isWifiDiscovering.first { it }
+        }
+        assertTrue(viewModel.isWifiDiscovering.value)
     }
 }

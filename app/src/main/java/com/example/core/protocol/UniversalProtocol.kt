@@ -4,7 +4,6 @@ import com.example.core.capability.DeviceCapabilities
 import com.example.core.capability.PlatformType
 import com.example.data.model.ClipboardItem
 import com.example.sync.model.parseClipboardItemFromJson
-import com.example.sync.model.toJsonString
 import org.json.JSONObject
 
 /**

@@ -9,27 +9,6 @@ import org.json.JSONObject
  * Encodes all rich clipboard metadata (type, mimeType, fileName, sizeBytes, SHA-256 hash)
  * safely with standard JSON escaping for Unicode, emoji, multiline, code, JSON, and binary data.
  */
-fun ClipboardItem.toJsonString(): String {
-    val json = JSONObject()
-    json.put("payloadType", "CLIPBOARD_ITEM")
-    json.put("id", id)
-    json.put("sourceDeviceId", sourceDeviceId)
-    json.put("sourceDeviceName", sourceDeviceName)
-    json.put("type", type)
-    json.put("content", content)
-    json.put("mimeType", mimeType)
-    if (fileName != null) {
-        json.put("fileName", fileName)
-    }
-    json.put("sizeBytes", if (sizeBytes > 0) sizeBytes else content.toByteArray(Charsets.UTF_8).size.toLong())
-    json.put("createdAt", createdAt)
-    json.put("expiresAt", expiresAt)
-    json.put("hash", hash)
-    json.put("isFavorite", isFavorite)
-    json.put("isPinned", isPinned)
-    return json.toString()
-}
-
 fun parseClipboardItemFromJson(jsonString: String): ClipboardItem? {
     return try {
         val trimmed = jsonString.trim()

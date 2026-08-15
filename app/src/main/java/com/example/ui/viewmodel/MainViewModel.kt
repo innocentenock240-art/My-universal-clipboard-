@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.policy.SyncPolicy
 import com.example.core.policy.SyncScope
+import com.example.core.transport.NetworkPresenceMonitor
 import com.example.core.transport.TransportManager
 import com.example.core.transport.TransportStatus
 import com.example.data.clipboard.AndroidClipboardCaptureSource
@@ -34,7 +35,8 @@ class MainViewModel @JvmOverloads constructor(
     val localWifiTransport: LocalWifiTransport = LocalWifiTransport(context = application),
     val bluetoothTransport: BluetoothTransportAdapter = BluetoothTransportAdapter(),
     val wifiDirectTransport: WifiDirectTransportAdapter = WifiDirectTransportAdapter(),
-    val syncEngine: SyncEngine = SyncEngine(listOf(localWifiTransport))
+    val transportManager: TransportManager = TransportManager(listOf(localWifiTransport, bluetoothTransport, wifiDirectTransport)),
+    val syncEngine: SyncEngine = SyncEngine(transportManager)
 ) : AndroidViewModel(application) {
 
     private val localDevice = Device(
@@ -47,8 +49,8 @@ class MainViewModel @JvmOverloads constructor(
     )
 
     private val clipboardCore = ClipboardCoreManager.getInstance(application, repository)
+    val networkPresenceMonitor = NetworkPresenceMonitor(application)
 
-    val transportManager = TransportManager(listOf(localWifiTransport, bluetoothTransport, wifiDirectTransport))
     val transportStatuses: StateFlow<List<TransportStatus>> = transportManager.transportStatuses
 
     private val _syncPolicy = MutableStateFlow(SyncPolicy())
@@ -112,9 +114,14 @@ class MainViewModel @JvmOverloads constructor(
         // Wire local clipboard capture to SyncEngine subject to user SyncPolicy
         clipboardCore.onItemProcessedListener = { item ->
             val policy = _syncPolicy.value
-            if (policy.shouldSyncItem(null, item.sizeBytes)) {
+            val shouldSync = policy.shouldSyncItem(null, item.sizeBytes)
+            Log.i("SyncDiagnostics", "[SYNC_PATH_1_INVOCATION] Local item captured: ID=${item.id}, length=${item.content.length}, hash=${item.hash.take(8)}")
+            Log.i("SyncDiagnostics", "[SYNC_PATH_2_POLICY] Policy check: autoSync=${policy.isAutoSyncEnabled}, paused=${policy.isSyncPaused}, size=${item.sizeBytes} -> allowed=$shouldSync")
+
+            if (shouldSync) {
                 viewModelScope.launch(Dispatchers.IO) {
-                    syncEngine.syncClipboardItem(item)
+                    val result = syncEngine.syncClipboardItem(item)
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_RESULT] Auto-sync dispatch result for item ${item.id}: $result")
                 }
             } else {
                 Log.d("MainViewModel", "Item kept local according to SyncPolicy [AutoSync: ${policy.isAutoSyncEnabled}, Paused: ${policy.isSyncPaused}]")
@@ -130,8 +137,10 @@ class MainViewModel @JvmOverloads constructor(
                         Log.w("MainViewModel", "Dropped incoming item from blocked device: ${incomingItem.sourceDeviceId}")
                         return@collect
                     }
-                    clipboardCore.applyRemoteClipboardItem(incomingItem)
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_12_DB_INSERTION] Persisting remote item ${incomingItem.id} into database")
                     repository.insertClipboardItem(incomingItem)
+                    Log.i("SyncDiagnostics", "[SYNC_PATH_13_CLIPBOARD_INJECTION] Injecting remote item ${incomingItem.id} into system clipboard")
+                    clipboardCore.applyRemoteClipboardItem(incomingItem)
                     Log.i("MainViewModel", "Persisted and applied remote ClipboardItem [ID: ${incomingItem.id}] from ${incomingItem.sourceDeviceName}")
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to persist remote ClipboardItem ${incomingItem.id}", e)
@@ -146,6 +155,13 @@ class MainViewModel @JvmOverloads constructor(
             }
         }
         startWifiDiscovery()
+
+        // Setup Network Presence Monitor for automatic network lifecycle recovery
+        networkPresenceMonitor.onNetworkRestored = {
+            Log.i("MainViewModel", "Network restored: refreshing Wi-Fi discovery and transports")
+            startWifiDiscovery()
+        }
+        networkPresenceMonitor.startMonitoring()
     }
 
     fun toggleAutoSync() {
@@ -160,12 +176,14 @@ class MainViewModel @JvmOverloads constructor(
     }
 
     fun syncItemNow(item: ClipboardItem, targetDeviceId: String? = null) {
+        Log.i("SyncDiagnostics", "[SYNC_PATH_1_INVOCATION] Manual Sync triggered for item ${item.id} (target: ${targetDeviceId ?: "ALL"})")
         viewModelScope.launch(Dispatchers.IO) {
-            if (targetDeviceId != null) {
+            val result = if (targetDeviceId != null) {
                 localWifiTransport.sendItem(item, targetDeviceId)
             } else {
                 syncEngine.syncClipboardItem(item)
             }
+            Log.i("SyncDiagnostics", "[SYNC_PATH_RESULT] Manual sync completion result for item ${item.id}: $result")
         }
     }
 
@@ -292,17 +310,17 @@ class MainViewModel @JvmOverloads constructor(
 
     // Milestone 5.2 Local Wi-Fi Discovery Methods
     fun startWifiDiscovery() {
+        _isWifiDiscovering.value = true
         viewModelScope.launch(Dispatchers.IO) {
             localWifiTransport.startDiscovery()
-            _isWifiDiscovering.value = true
             _isWifiServerRunning.value = localWifiTransport.isAvailable
         }
     }
 
     fun stopWifiDiscovery() {
+        _isWifiDiscovering.value = false
         viewModelScope.launch(Dispatchers.IO) {
             localWifiTransport.stopDiscovery()
-            _isWifiDiscovering.value = false
             _isWifiServerRunning.value = localWifiTransport.isAvailable
         }
     }
@@ -357,6 +375,7 @@ class MainViewModel @JvmOverloads constructor(
 
     override fun onCleared() {
         super.onCleared()
+        networkPresenceMonitor.stopMonitoring()
         localWifiTransport.stopServer()
     }
 }

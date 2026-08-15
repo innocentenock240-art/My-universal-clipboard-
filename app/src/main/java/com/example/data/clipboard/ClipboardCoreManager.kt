@@ -1,6 +1,7 @@
 package com.example.data.clipboard
 
 import android.util.Log
+import com.example.core.identity.DeviceIdentityManager
 import com.example.data.model.ClipboardItem
 import com.example.data.repository.ClipboardRepository
 import kotlinx.coroutines.CoroutineScope
@@ -29,8 +30,8 @@ import java.security.MessageDigest
 class ClipboardCoreManager(
     private val captureSource: ClipboardCaptureSource,
     private val repository: ClipboardRepository,
-    private val deviceId: String = "dev_local_${android.os.Build.MODEL.replace(" ", "_")}",
-    private val deviceName: String = if (android.os.Build.MODEL.isNullOrBlank()) "Local Device" else android.os.Build.MODEL,
+    private val deviceId: String = DeviceIdentityManager.getLocalDeviceId(),
+    private val deviceName: String = DeviceIdentityManager.getLocalDeviceName(),
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default)
 ) {
     @Volatile
@@ -248,9 +249,8 @@ class ClipboardCoreManager(
                 INSTANCE ?: run {
                     val appContext = context.applicationContext
                     val captureSource = AndroidClipboardCaptureSource(appContext)
-                    val modelName = android.os.Build.MODEL ?: ""
-                    val deviceId = "dev_local_${modelName.replace(" ", "_")}"
-                    val deviceName = if (modelName.isBlank()) "Local Device" else modelName
+                    val deviceId = DeviceIdentityManager.getLocalDeviceId(appContext)
+                    val deviceName = DeviceIdentityManager.getLocalDeviceName()
 
                     val instance = ClipboardCoreManager(
                         captureSource = captureSource,
